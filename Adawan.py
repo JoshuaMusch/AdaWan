@@ -48,7 +48,11 @@ class IllegalCharError(Error):
 
 class InvalidSyntaxError(Error):
     def __init__ (self, posStart, posEnd, details):
-        super().__init__(posStart, posEnd, 'Invalid Syntax', "'" + details + "'")
+        super().__init__(posStart, posEnd, 'Invalid Syntax', details)
+
+class RunTimeError(Error):
+    def __init__ (self, posStart, posEnd, details):
+        super().__init__(posStart, posEnd, 'Runtime Error', details)
 
 ################################################################################
 #                                   POSITION                                   #
@@ -188,7 +192,9 @@ class Lexar:
 
 class NumberNode:
     def __init__ (self, tok):
-        self.tok = tok
+        self.tok       = tok
+        self.posStart  = self.tok.posStart
+        self.posEnd    = self.tok.posEnd
     def __repr__ (self):
         return f'{self.tok}'
 
@@ -197,13 +203,17 @@ class BinOpNode:
         self.leftNode  = leftNode
         self.opTok     = opTok
         self.rightNode = rightNode
+        self.posStart  = self.leftNode.posStart
+        self.posEnd    = self.rightNode.posEnd
     def __repr__ (self):
         return f'({self.leftNode}, {self.opTok}, {self.rightNode})'
 
 class UnaryOpNode:
     def __init__ (self, opTok, node):
-        self.opTok = opTok
-        self.node  = node
+        self.opTok     = opTok
+        self.node      = node
+        self.posStart  = self.opTok.posStart
+        self.posEnd    = self.node.posEnd
 
     def __repr__ (self):
         return f'({self.opTok}, {self.node})'
@@ -255,7 +265,6 @@ class Parser:
 
 
     def Parse (self):
-        print (self.tokens)
         res = self.Expr()
         if not res.error and self.currToken._type != 'EOF':
             return res.Failure(InvalidSyntaxError(
@@ -268,7 +277,6 @@ class Parser:
     def Factor (self):
         res = ParseResult()
         tok = self.currToken
-        print(tok._type)
         if tok._type == "FACTORIAL":
             res.Register(self.Advance())
             factor = res.Register(self.Factor())
@@ -326,17 +334,138 @@ class Parser:
         return res.Success(left)
 
 ################################################################################
-#                                     Run                                      #
+#                                RUNTIME RESULT                                #
+################################################################################
+
+class RTResult:
+    def __init__(self):
+        self.value = None
+        self.error = None
+
+    def Register (self, res):
+        if res.error: self.error = res.error
+        return res.value
+
+    def Success (self, value):
+        self.value = value
+        return self
+
+    def Failure (self, error):
+        self.error = error
+        return self
+
+
+################################################################################
+#                                    VALUES                                    #
+################################################################################
+
+class Number:
+    def __init__(self, value):
+        self.value = value
+        self.SetPosition()
+
+    def SetPosition(self, posStart = None, posEnd = None):
+        self.posStart = posStart
+        self.posEnd   = posEnd
+        return self
+
+    def AddedTo(self, B):
+        if isinstance(B, Number):
+            return Number(self.value + B.value), None
+
+    def SubtractedBy(self, B):
+        if isinstance(B, Number):
+            return Number(self.value - B.value), None
+
+    def MultipliedBy(self, B):
+        if isinstance(B, Number):
+            return Number(self.value * B.value), None
+
+    def DividedBy(self, B):
+        if isinstance(B, Number):
+            if B.value == 0:
+                return None, RunTimeError(
+                    B.posStart, B.posEnd,
+                    "Division By Zero"
+                )
+            return Number(self.value / B.value), None
+
+    def __repr__(self):
+        return str(self.value)
+
+################################################################################
+#                                 INTERPRETER                                  #
+################################################################################
+
+class Interpreter:
+    def Visit (self, node):
+        methodName = f'visit_{type(node).__name__}'
+        method     = getattr(self, methodName, self.NoVisitMethod)
+        return method(node)
+
+    def NoVisitMethod (self, node):
+        raise exception(f'No visit_{type(node).__name__} method defined')
+
+    def visit_NumberNode (self, node):
+        return RTResult().Success(
+            Number(node.tok.value).SetPosition(node.posStart, node.posEnd)
+        )
+
+    def visit_BinOpNode (self, node):
+        res   = RTResult()
+        left  = res.Register(self.Visit(node.leftNode))
+        if res.error: return res
+        right = res.Register(self.Visit(node.rightNode))
+        if res.error: return res
+
+        error = None
+
+        if node.opTok._type == "PLUS":
+            result, error = left.AddedTo(right)
+        elif node.opTok._type == "MINUS":
+            result, error = left.SubtractedBy(right)
+        elif node.opTok._type == "MUL":
+            result, error = left.MultipliedBy(right)
+        elif node.opTok._type == "DIV":
+            result, error = left.DividedBy(right)
+
+        if error:
+            return res.Failure(error)
+        else:
+            return res.Success(result.SetPosition(node.posStart, node.posEnd))
+
+    def visit_UnaryOpNode (self, node):
+        res    = RTResult()
+        number = res.Register(self.Visit(node.node))
+        if res.error: return res
+
+        error = None
+
+        if node.opTok._type == "MINUS":
+            number, error = number.MultipliedBy(Number(-1))
+
+        if error:
+            return res.Failure(error)
+        else:
+            return res.Success(number.SetPosition(node.posStart, node.posEnd))
+
+################################################################################
+#                                    Main                                      #
 ################################################################################
 
 def Run (fname, text):
-    lexar = Lexar(fname, text)
+    # Generate Tokens
+    lexar         = Lexar(fname, text)
     tokens, error = lexar.MakeTokens()
-    if error:
-        return None, error
+    if error: return None, error
 
     # Generate Abstract Search Tree
     parser = Parser(tokens)
     ast    = parser.Parse()
+    if ast.error: return None, ast.error
 
-    return ast.node, ast.error
+    # Run the Interpreter
+    interpreter = Interpreter()
+    res         = interpreter.Visit(ast.node)
+
+    return res.value, res.error
