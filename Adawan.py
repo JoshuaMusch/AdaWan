@@ -47,12 +47,31 @@ class IllegalCharError(Error):
         super().__init__(posStart, posEnd, 'Illegal Character', "'" + details + "'")
 
 class InvalidSyntaxError(Error):
-    def __init__ (self, posStart, posEnd, details):
+    def __init__ (self, posStart, posEnd, details=''):
         super().__init__(posStart, posEnd, 'Invalid Syntax', details)
 
 class RunTimeError(Error):
-    def __init__ (self, posStart, posEnd, details):
+    def __init__ (self, posStart, posEnd, details, context):
         super().__init__(posStart, posEnd, 'Runtime Error', details)
+        self.context = context
+
+    def AsString (self):
+        errorStr  = self.GenerateTraceback()
+        errorStr += f'{self.errorName}: {self.details}\n'
+        errorStr += self.StringWithArrows()
+        return errorStr
+
+    def GenerateTraceback (self):
+        result  = ''
+        pos     = self.posStart
+        context = self.context
+
+        while context:
+            result  = f'  File {pos.fname}, line {str(pos.line + 1)}, in {context.dispName}\n' + result
+            pos     = context.parentEntryPos
+            context = context.parent
+
+        return 'Traceback (most Recent Call Last):\n' + result
 
 ################################################################################
 #                                   POSITION                                   #
@@ -338,7 +357,7 @@ class Parser:
 ################################################################################
 
 class RTResult:
-    def __init__(self):
+    def __init__ (self):
         self.value = None
         self.error = None
 
@@ -360,62 +379,78 @@ class RTResult:
 ################################################################################
 
 class Number:
-    def __init__(self, value):
+    def __init__ (self, value):
         self.value = value
         self.SetPosition()
+        self.SetContext(None)
 
-    def SetPosition(self, posStart = None, posEnd = None):
+    def SetPosition (self, posStart = None, posEnd = None):
         self.posStart = posStart
         self.posEnd   = posEnd
         return self
 
-    def AddedTo(self, B):
-        if isinstance(B, Number):
-            return Number(self.value + B.value), None
+    def SetContext(self, context):
+        self.context = context
+        return self
 
-    def SubtractedBy(self, B):
+    def AddedTo (self, B):
         if isinstance(B, Number):
-            return Number(self.value - B.value), None
+            return Number(self.value + B.value).SetContext(self.context), None
 
-    def MultipliedBy(self, B):
+    def SubtractedBy (self, B):
         if isinstance(B, Number):
-            return Number(self.value * B.value), None
+            return Number(self.value - B.value).SetContext(self.context), None
 
-    def DividedBy(self, B):
+    def MultipliedBy (self, B):
+        if isinstance(B, Number):
+            return Number(self.value * B.value).SetContext(self.context), None
+
+    def DividedBy (self, B):
         if isinstance(B, Number):
             if B.value == 0:
                 return None, RunTimeError(
                     B.posStart, B.posEnd,
-                    "Division By Zero"
+                    "Division By Zero",
+                    self.context
                 )
-            return Number(self.value / B.value), None
+            return Number(self.value / B.value).SetContext(self.context), None
 
-    def __repr__(self):
+    def __repr__ (self):
         return str(self.value)
+
+################################################################################
+#                                   CONTEXT                                    #
+################################################################################
+
+class Context:
+    def __init__ (self, dispName, parent = None, parentEntryPos = None):
+        self.dispName       = dispName
+        self.parent         = parent
+        self.parentEntryPos = parentEntryPos
 
 ################################################################################
 #                                 INTERPRETER                                  #
 ################################################################################
 
 class Interpreter:
-    def Visit (self, node):
+    def Visit (self, node, context):
         methodName = f'visit_{type(node).__name__}'
         method     = getattr(self, methodName, self.NoVisitMethod)
-        return method(node)
+        return method(node, context)
 
-    def NoVisitMethod (self, node):
+    def NoVisitMethod (self, node, context):
         raise exception(f'No visit_{type(node).__name__} method defined')
 
-    def visit_NumberNode (self, node):
+    def visit_NumberNode (self, node, context):
         return RTResult().Success(
-            Number(node.tok.value).SetPosition(node.posStart, node.posEnd)
+            Number(node.tok.value).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
-    def visit_BinOpNode (self, node):
+    def visit_BinOpNode (self, node, context):
         res   = RTResult()
-        left  = res.Register(self.Visit(node.leftNode))
+        left  = res.Register(self.Visit(node.leftNode, context))
         if res.error: return res
-        right = res.Register(self.Visit(node.rightNode))
+        right = res.Register(self.Visit(node.rightNode, context))
         if res.error: return res
 
         error = None
@@ -434,15 +469,15 @@ class Interpreter:
         else:
             return res.Success(result.SetPosition(node.posStart, node.posEnd))
 
-    def visit_UnaryOpNode (self, node):
+    def visit_UnaryOpNode (self, node, context):
         res    = RTResult()
-        number = res.Register(self.Visit(node.node))
+        number = res.Register(self.Visit(node.node, context))
         if res.error: return res
 
         error = None
 
         if node.opTok._type == "MINUS":
-            number, error = number.MultipliedBy(Number(-1))
+            number, error = number.MultipliedBy(Number(-1).SetContext(context))
 
         if error:
             return res.Failure(error)
@@ -466,6 +501,7 @@ def Run (fname, text):
 
     # Run the Interpreter
     interpreter = Interpreter()
-    res         = interpreter.Visit(ast.node)
+    context     = Context('<Program>')
+    res         = interpreter.Visit(ast.node, context)
 
     return res.value, res.error
