@@ -243,10 +243,16 @@ class UnaryOpNode:
 
 # Grammar - - - - - - - - - - - - - - - - - - -
 # Expression : term ((PLUS | MINUS) Term)*    -
+#                                             -
 # Term       : factor ((MUL | DIV) factor)*   -
-# Factor     : INT | FLOAT                    -
-#            : (PLUS | MINUS) Factor          -
+#                                             -
+# Factor     : (PLUS | MINUS) Factor          -
+#            : power                          -
+#                                             -
+# Power      : atom (POWER factor)*           -
 #            : FACTORIAL Factor               -
+#                                             -
+# Atom       : INT | FLOAT                    -
 #            : LPAREN expr RPAREN             -
 # - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -292,23 +298,10 @@ class Parser:
             ))
         return res
 
-
-    def Factor (self):
+    def Atom (self):
         res = ParseResult()
         tok = self.currToken
-        if tok._type == "FACTORIAL":
-            res.Register(self.Advance())
-            factor = res.Register(self.Factor())
-            if res.error: return res
-            return res.Success(UnaryOpNode(tok, factor))
-
-        elif tok._type in ("PLUS", "MINUS"):
-            res.Register(self.Advance())
-            factor = res.Register(self.Factor())
-            if res.error: return res
-            return res.Success(UnaryOpNode(tok, factor))
-
-        elif tok._type in ("INT", "FLOAT"):
+        if tok._type in ("INT", "FLOAT"):
             res.Register(self.Advance())
             return res.Success(NumberNode(tok))
 
@@ -325,28 +318,48 @@ class Parser:
                     self.currToken.posStart, self.currToken.posEnd,
                     "Expected ')'"
                 ))
-
         return res.Failure(InvalidSyntaxError(
             tok.posStart, tok.posEnd,
-            'Expected an Int or Float'
+            "Expected an Int | Float | '+' | '-' | '('"
         ))
 
+    def Power(self):
+        return self.BinOp(self.Atom, ("POWER"), self.Factor)
+
+    def Factor (self):
+        res = ParseResult()
+        tok = self.currToken
+        if tok._type == "FACTORIAL":
+            res.Register(self.Advance())
+            factor = res.Register(self.Factor())
+            if res.error: return res
+            return res.Success(UnaryOpNode(tok, factor))
+
+        elif tok._type in ("PLUS", "MINUS"):
+            res.Register(self.Advance())
+            factor = res.Register(self.Factor())
+            if res.error: return res
+            return res.Success(UnaryOpNode(tok, factor))
+
+        return self.Power()
+
     def Term (self):
-        return self.BinOp(self.Factor, ("MUL","DIV","POWER"))
+        return self.BinOp(self.Factor, ("MUL","DIV"))
 
     def Expr (self):
         return self.BinOp(self.Term, ("PLUS","MINUS"))
 
 
-    def BinOp (self, func, operations):
+    def BinOp (self, funcA, operations, funcB = None):
+        if funcB == None: funcB = funcA
         res = ParseResult()
-        left = res.Register(func())
+        left = res.Register(funcA())
         if res.error: return res
 
         while self.currToken._type in operations:
             opTok = self.currToken
             res.Register(self.Advance())
-            right = res.Register(func())
+            right = res.Register(funcB())
             if res.error: return res
             left  = BinOpNode(left, opTok, right)
 
@@ -415,6 +428,10 @@ class Number:
                 )
             return Number(self.value / B.value).SetContext(self.context), None
 
+    def PowerOf (self, B):
+        if isinstance(B, Number):
+            return Number(self.value ** B.value).SetContext(self.context), None
+
     def __repr__ (self):
         return str(self.value)
 
@@ -463,6 +480,8 @@ class Interpreter:
             result, error = left.MultipliedBy(right)
         elif node.opTok._type == "DIV":
             result, error = left.DividedBy(right)
+        elif node.opTok._type == "POWER":
+            result, error = left.PowerOf(right)
 
         if error:
             return res.Failure(error)
