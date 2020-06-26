@@ -4,6 +4,8 @@ import string
 #                                   CONSTANTS                                  #
 ################################################################################
 
+DEBUG          = 0
+
 DIGITS         = '0123456789'
 LETTERS        = string.ascii_letters
 LETTERS_DIGITS = LETTERS + DIGITS
@@ -49,6 +51,10 @@ class Error:
 class IllegalCharError(Error):
     def __init__ (self, posStart, posEnd, details):
         super().__init__(posStart, posEnd, 'Illegal Character', "'" + details + "'")
+
+class ExpectedCharError(Error):
+    def __init__ (self, posStart, posEnd, details):
+        super().__init__(posStart, posEnd, 'Expected Character', details)
 
 class InvalidSyntaxError(Error):
     def __init__ (self, posStart, posEnd, details=''):
@@ -126,10 +132,20 @@ TT_EQ			= 'EQ'
 TT_LPAREN   	= 'LPAREN'
 TT_RPAREN   	= 'RPAREN'
 
+TT_EE           = 'EE'
+TT_NE           = 'NE'
+TT_LT           = 'LT'
+TT_GT           = 'GT'
+TT_LTE          = 'LTE'
+TT_GTE          = 'GTE'
+
 TT_EOF          = 'EOF'
 
 KEYWORDS = [
-    'LET'
+    'LET',
+    'AND', '&',
+    'OR',  '|',
+    'NOT', '~'
 ]
 
 class Token:
@@ -218,15 +234,22 @@ class Lexar:
                 for x in range(len(poppedTokens)):
                     tokens.append(poppedTokens[len(poppedTokens)-x-1])
                 self.Advance()
-            elif self.currChar == '=':
-                tokens.append(Token(TT_EQ,        posStart = self.currPos))
-                self.Advance()
             elif self.currChar == '(':
                 tokens.append(Token(TT_LPAREN,    posStart = self.currPos))
                 self.Advance()
             elif self.currChar == ')':
                 tokens.append(Token(TT_RPAREN,    posStart = self.currPos))
                 self.Advance()
+            elif self.currChar == '~':
+                tok, error = self.MakeNotEquals()
+                if error: return [], error
+                tokens.append(tok)
+            elif self.currChar == '=':
+                tokens.append(self.MakeEquals())
+            elif self.currChar == '<':
+                tokens.append(self.MakeLessThan())
+            elif self.currChar == '>':
+                tokens.append(self.MakeGreaterThan())
             else:
                 posStart = self.currPos.Copy()
                 char = self.currChar
@@ -271,6 +294,51 @@ class Lexar:
             tokType = TT_IDENTIFIER
 
         return Token(tokType, idStr, posStart, self.currPos)
+
+    def MakeNotEquals (self):
+        posStart = self.currPos.Copy()
+        self.Advance()
+
+        if self.currChar == '=':
+            print(self.currChar)
+            self.Advance()
+            return Token(TT_NE, posStart = posStart, posEnd = self.currPos), None
+
+        self.Advance()
+        return None, ExpectedCharError(posStart, self.currPos, "'=' (after '~')")
+
+    def MakeEquals (self):
+        tokType = TT_EQ
+        posStart = self.currPos.Copy()
+        self.Advance()
+
+        if self.currChar == '=':
+            self.Advance()
+            tokType = TT_EE
+
+        return Token(tokType, posStart = posStart, posEnd = self.currPos)
+
+    def MakeLessThan (self):
+        tokType = TT_LT
+        posStart = self.currPos.Copy()
+        self.Advance()
+
+        if self.currChar == '=':
+            self.Advance()
+            tokType = TT_LTE
+
+        return Token(tokType, posStart = posStart, posEnd = self.currPos)
+
+    def MakeGreaterThan (self):
+        tokType = TT_GT
+        posStart = self.currPos.Copy()
+        self.Advance()
+
+        if self.currChar == '=':
+            self.Advance()
+            tokType = TT_GTE
+
+        return Token(tokType, posStart = posStart, posEnd = self.currPos)
 
 ################################################################################
 #                                    NODES                                     #
@@ -324,7 +392,12 @@ class VarAccessNode:
 
 # Grammar - - - - - - - - - - - - - - - - - - -
 # Expression : KEYWORD:LET IDENTIFIER EQ expr -
-#            : term ((PLUS | MINUS) Term)*    -
+#            : comp-expr (AND|OR) comp-expr   -
+#                                             -
+# Comp-expr  : NOT comp-expr
+#            : arith-expr (EE|NE) arith-expr  -
+#                                             -
+# Arith-expr : term ((PLUS | MINUS) Term)*    -
 #                                             -
 # Term       : factor ((MUL|DIV|MOD) factor)* -
 #                                             -
@@ -333,12 +406,12 @@ class VarAccessNode:
 #            : power                          -
 #                                             -
 # Power      : atom (POWER factor)*           -
-#            : factorial
+#            : factorial                      -
 #                                             -
-# Factorial  : FACTORIAL (atom)
-
 # Atom       : INT | FLOAT | IDENTIFIER       -
 #            : LPAREN expr RPAREN             -
+#                                             -
+
 # - - - - - - - - - - - - - - - - - - - - - - -
 
 class ParseResult:
@@ -357,6 +430,7 @@ class ParseResult:
 
     def Success (self, node):
         self.node = node
+        if DEBUG: print(node)
         return self
 
     def Failure (self, error):
@@ -422,7 +496,7 @@ class Parser:
         ))
 
     def Power (self):
-        return self.BinOp(self.Atom, (TT_POWER), self.Factor)
+        return self.BinOp(self.Atom, (TT_POWER, ), self.Factor)
 
     def Factor (self):
         res = ParseResult()
@@ -444,6 +518,29 @@ class Parser:
 
     def Term (self):
         return self.BinOp(self.Factor, (TT_MUL, TT_DIV, TT_MOD))
+
+    def ArithExpr(self):
+        return self.BinOp(self.Term, (TT_PLUS, TT_MINUS))
+
+    def CompExpr (self):
+        res = ParseResult()
+        if self.currToken.Matches(TT_KEYWORD, 'NOT') or self.currToken.Matches(TT_KEYWORD, '~'):
+            opTok = self.currToken
+            res.RegisterAdvance()
+            self.Advance()
+
+            node = res.Register(self.CompExpr())
+            if res.error: return res
+            return res.Success(UnaryOpNode(opTok, node))
+
+        node = res.Register(self.BinOp(self.ArithExpr, (TT_EE, TT_NE, TT_GT, TT_GTE, TT_LT, TT_LTE)))
+        if res.error:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an Int | Float | Identifier | '+' | '-' | '(' | 'NOT'"
+            ))
+
+        return res.Success(node)
 
     def Expr (self):
         res = ParseResult()
@@ -472,7 +569,10 @@ class Parser:
             if res.error: return res
             return res.Success(VarAssignNode(varName, expr))
 
-        node = res.Register(self.BinOp(self.Term, (TT_PLUS, TT_MINUS)))
+        node = res.Register(self.BinOp(self.CompExpr, ((TT_KEYWORD, 'AND'), (TT_KEYWORD, 'OR'))))
+        # node = res.Register(self.BinOp(self.CompExpr,
+        #     ((TT_KEYWORD, "AND"), (TT_KEYWORD, "&"),
+        #     (TT_KEYWORD, "OR"),  (TT_KEYWORD, "|"))))
         if res.error:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
@@ -487,7 +587,7 @@ class Parser:
         left = res.Register(funcA())
         if res.error: return res
 
-        while self.currToken._type in operations:
+        while self.currToken._type in operations or (self.currToken._type, self.currToken.value) in operations:
             opTok = self.currToken
             res.RegisterAdvance()
             self.Advance()
@@ -588,6 +688,32 @@ class Number:
                 )
             return Number(self.value % B.value).SetContext(self.context), None
 
+    def GetComparison(self, tokType, B):
+        if isinstance(B, Number):
+            if tokType == TT_EE:
+                return Number(int(self.value == B.value)).SetContext(self.context), None
+            if tokType == TT_NE:
+                return Number(int(self.value != B.value)).SetContext(self.context), None
+            if tokType == TT_LT:
+                return Number(int(self.value < B.value)).SetContext(self.context), None
+            if tokType == TT_GT:
+                return Number(int(self.value > B.value)).SetContext(self.context), None
+            if tokType == TT_LTE:
+                return Number(int(self.value <= B.value)).SetContext(self.context), None
+            if tokType == TT_GTE:
+                return Number(int(self.value >= B.value)).SetContext(self.context), None
+
+    def AndedBy(self, B):
+        if isinstance(B, Number):
+            return Number(int(self.value and B.value)).SetContext(self.context), None
+
+    def OredBy(self, B):
+        if isinstance(B, Number):
+            return Number(int(self.value or B.value)).SetContext(self.context), None
+
+    def Notted(self):
+        return Number(1 if self.value == 0 else 0).SetContext(self.context), None
+
     def Copy (self):
         copy = Number(self.value)
         copy.SetPosition(self.posStart, self.posEnd)
@@ -679,19 +805,36 @@ class Interpreter:
         if res.error: return res
 
         error = None
+        tokType = node.opTok._type
 
-        if node.opTok._type   == TT_PLUS:
+        if tokType   == TT_PLUS:
             result, error = left.AddedTo(right)
-        elif node.opTok._type == TT_MINUS:
+        elif tokType == TT_MINUS:
             result, error = left.SubtractedBy(right)
-        elif node.opTok._type == TT_MUL:
+        elif tokType == TT_MUL:
             result, error = left.MultipliedBy(right)
-        elif node.opTok._type == TT_DIV:
+        elif tokType == TT_DIV:
             result, error = left.DividedBy(right)
-        elif node.opTok._type == TT_MOD:
+        elif tokType == TT_MOD:
             result, error = left.ModulusOf(right)
-        elif node.opTok._type == TT_POWER:
+        elif tokType == TT_POWER:
             result, error = left.PowerOf(right)
+        elif tokType == TT_EE:
+            result, error = left.GetComparison(TT_EE, right)
+        elif tokType == TT_NE:
+            result, error = left.GetComparison(TT_NE, right)
+        elif tokType == TT_LT:
+            result, error = left.GetComparison(TT_LT, right)
+        elif tokType == TT_GT:
+            result, error = left.GetComparison(TT_GT, right)
+        elif tokType == TT_LTE:
+            result, error = left.GetComparison(TT_LTE, right)
+        elif tokType == TT_GTE:
+            result, error = left.GetComparison(TT_GTE, right)
+        elif node.opTok.Matches(TT_KEYWORD,'AND') or node.opTok.Matches(TT_KEYWORD,'&'):
+            result, error = left.AndedBy(right)
+        elif node.opTok.Matches(TT_KEYWORD,'OR')  or node.opTok.Matches(TT_KEYWORD,'|'):
+            result, error = left.OredBy(right)
 
         if error:
             return res.Failure(error)
@@ -705,10 +848,12 @@ class Interpreter:
 
         error = None
 
-        if node.opTok._type == TT_MINUS:
+        if node.opTok._type   == TT_MINUS:
             number, error = number.MultipliedBy(Number(-1).SetContext(context))
-        if node.opTok._type == TT_FACTORIAL:
+        elif node.opTok._type == TT_FACTORIAL:
             number, error = number.Factorial()
+        elif node.opTok.Matches(TT_KEYWORD, 'NOT') or node.opTok.Matches(TT_KEYWORD, '~'):
+            number, error = number.Notted()
 
         if error:
             return res.Failure(error)
@@ -720,18 +865,22 @@ class Interpreter:
 ################################################################################
 
 globalSymbolTable = SymbolTable()
-globalSymbolTable.set("null", Number(0))
+globalSymbolTable.set("Null", Number(0))
+globalSymbolTable.set("True", Number(0))
+globalSymbolTable.set("False", Number(0))
 
 def Run (fname, text):
     # Generate Tokens
     lexar         = Lexar(fname, text)
     tokens, error = lexar.MakeTokens()
     if error: return None, error
+    if DEBUG: print(tokens)
 
     # Generate Abstract Search Tree
     parser = Parser(tokens)
     ast    = parser.Parse()
     if ast.error: return None, ast.error
+    if DEBUG: print(ast.node)
 
     # Run the Interpreter
     interpreter = Interpreter()
