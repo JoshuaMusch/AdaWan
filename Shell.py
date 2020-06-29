@@ -1,10 +1,24 @@
 import Adawan
+import sys
 
-while True:
+if len(sys.argv) == 2:
+    debug = sys.argv[1]
+    run   = 1
+elif len(sys.argv) == 1:
+    debug = 0
+    run   = 1
+else:
+    print("no more than one command line input")
+    run   = 0
+
+while run:
     text = input('>>')
-    result, error = Adawan.Run('<stdin>', text)
+    if text != "exit":
+        result, error = Adawan.Run('<stdin>', text, debug)
 
-    if error:
-        print(error.AsString())
+        if error:
+            print(error.AsString())
+        elif result:
+            print(result)
     else:
-        print(result)
+        run = 0
