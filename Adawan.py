@@ -137,7 +137,8 @@ TT_GT           = 'GT'
 TT_LTE          = 'LTE'
 TT_GTE          = 'GTE'
 
-TT_COLON        = ':'
+TT_COLON        = 'COLON'
+TT_COMMA        = 'COMMA'
 
 TT_EOF          = 'EOF'
 
@@ -147,11 +148,11 @@ KEYWORDS = [
     'OR',  '|',
     'NOT', '~',
     'if',
-    'then',
     'else',
     'elif',
     'for',
-    'while'
+    'while',
+    'function'
 ]
 
 class Token:
@@ -245,6 +246,9 @@ class Lexar:
                 self.Advance()
             elif self.currChar == ')':
                 tokens.append(Token(TT_RPAREN,    posStart = self.currPos))
+                self.Advance()
+            elif self.currChar == ',':
+                tokens.append(Token(TT_COMMA,     posStart = self.currPos))
                 self.Advance()
             elif self.currChar == '~':
                 tok, error = self.MakeNotEquals()
@@ -423,6 +427,30 @@ class VarAccessNode:
         self.posStart   = self.varNameTok.posStart
         self.posEnd     = self.varNameTok.posEnd
 
+class FuncDefNode:
+    def __init__(self, funcNameTok, argNameToks, bodyNode):
+        self.funcNameTok = funcNameTok
+        self.argNameToks = argNameToks
+        self.bodyNode    = bodyNode
+
+        if len(argNameToks) > 0:
+            self.posStart = argNameToks[0].posStart
+        else:
+            self.posStart = bodyNode.posStart
+
+        self.posEnd = bodyNode.posEnd
+
+class FuncCallNode:
+    def __init__ (self, nodeToCall, argNodes):
+        self.nodeToCall = nodeToCall
+        self.argNodes   = argNodes
+
+        self.posStart   = nodeToCall.posStart
+
+        if len(argNodes) > 0:
+            self.posEnd = argNodes[len(argNodes) - 1].posEnd
+        else:
+            self.posEnd = nodeToCall.posEnd
 
 ################################################################################
 #                                   Parser                                     #
@@ -443,14 +471,17 @@ class VarAccessNode:
 #            : FACTORIAL Factor                     -
 #            : power                                -
 #                                                   -
-# Power      : atom (POWER factor)*                 -
+# Power      : call (POWER factor)*                 -
 #            : factorial                            -
+#                                                   -
+# call       : atom (LPARN (expr(COMMA expr)*)?RPAREN)?
 #                                                   -
 # Atom       : INT | FLOAT | IDENTIFIER             -
 #            : LPAREN expr RPAREN                   -
 #            : If-expr                              -
 #            : For-expr                             -
 #            : While-expr                           -
+#            : function-defn                        -
 #                                                   -
 # If-expr    : KW: IF expr KW: THEN expr            -
 #            : (KW:ELIF expr KW: THEN expr)*        -
@@ -461,6 +492,9 @@ class VarAccessNode:
 #                                                   -
 # while-expr : KW:WHILE expr KW:THEN expr           -
 #                                                   -
+# func-def   : KW:function IDENTIFIER               -
+#                LPAREN (ID (COMMA ID)*)? RPAREN    -
+#                COLON expr                         -
 # - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 class ParseResult:
@@ -512,6 +546,88 @@ class Parser:
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
 
+    def FuncDef (self):
+        res      = ParseResult()
+        inputVar = []
+
+        if not self.currToken.Matches(TT_KEYWORD, "function"):
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected 'function'"
+            ))
+
+        res.RegisterAdvance()
+        self.Advance()
+
+        if not self.currToken._type == TT_IDENTIFIER:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an identifier"
+            ))
+
+        funcName = self.currToken
+        res.RegisterAdvance()
+        self.Advance()
+
+        if not self.currToken._type == TT_LPAREN:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an '('"
+            ))
+
+        res.RegisterAdvance()
+        self.Advance()
+
+        if self.currToken._type == TT_IDENTIFIER:
+            inputVar.append(self.currToken)
+            res.RegisterAdvance()
+            self.Advance()
+
+            while self.currToken._type == TT_COMMA:
+                res.RegisterAdvance()
+                self.Advance()
+
+                if not self.currToken._type == TT_IDENTIFIER:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected an identifier"
+                    ))
+
+                inputVar.append(self.currToken)
+
+                res.RegisterAdvance()
+                self.Advance()
+
+            if not self.currToken._type == TT_RPAREN:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected a ',' | ')'"
+                ))
+
+        else:
+            if not self.currToken._type == TT_RPAREN:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected an identifier | ')'"
+                ))
+
+        res.RegisterAdvance()
+        self.Advance()
+
+        if not self.currToken._type == TT_COLON:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected ':'"
+            ))
+
+        res.RegisterAdvance()
+        self.Advance()
+
+        body = res.Register(self.Expr())
+        if res.error: return res
+
+        return res.Success(FuncDefNode(funcName, inputVar, body))
+
     def IfExpr (self):
         res      = ParseResult()
         cases    = []
@@ -529,10 +645,10 @@ class Parser:
         condition = res.Register(self.Expr())
         if res.error: return res
 
-        if not self.currToken.Matches(TT_KEYWORD, "then"):
+        if not self.currToken._type == TT_COLON:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
-                "Expected 'then'"
+                "Expected ':'"
             ))
 
         res.RegisterAdvance()
@@ -549,10 +665,10 @@ class Parser:
             condition = res.Register(self.Expr())
             if res.error: return res
 
-            if not self.currToken.Matches(TT_KEYWORD, "then"):
+            if not self.currToken._type == TT_COLON:
                 return res.Failure(InvalidSyntaxError(
                     self.currToken.posStart, self.currToken.posEnd,
-                    "Expected 'then'"
+                    "Expected ':'"
                 ))
 
             res.RegisterAdvance()
@@ -636,10 +752,10 @@ class Parser:
         res.RegisterAdvance()
         self.Advance()
 
-        if not self.currToken.Matches(TT_KEYWORD, "then"):
+        if not self.currToken._type == TT_COLON:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
-                "Expected an ')'"
+                "Expected ':'"
             ))
 
         res.RegisterAdvance()
@@ -664,10 +780,10 @@ class Parser:
         condition = res.Register(self.Expr())
         if res.error: return res
 
-        if not self.currToken.Matches(TT_KEYWORD, "then"):
+        if not self.currToken._type == TT_COLON:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
-                "Expected 'then'"
+                "Expected ':'"
             ))
 
         res.RegisterAdvance()
@@ -725,13 +841,58 @@ class Parser:
 
             return res.Success(WhileExpr)
 
+        elif tok.Matches(TT_KEYWORD, "function"):
+            funcDef = res.Register(self.FuncDef())
+            if res.error: return res
+
+            return res.Success(funcDef)
+
         return res.Failure(InvalidSyntaxError(
             tok.posStart, tok.posEnd,
-            "Expected an Int | Float | Identifier | '+' | '-' | '('"
+            "Expected an Int | Float | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function'"
         ))
 
+    def Call (self):
+        res = ParseResult()
+        atom = res.Register(self.Atom())
+        if res.error: return res
+
+        if self.currToken._type == TT_LPAREN:
+            res.RegisterAdvance()
+            self.Advance()
+            inputVar = []
+
+            if self.currToken._type == TT_RPAREN:
+                res.RegisterAdvance()
+                self.Advance()
+            else:
+                inputVar.append(res.Register(self.Expr()))
+                if res.error:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected a '(' | 'let' | 'if' | 'for' | 'while' | 'function' | int | float | identifier"
+                    ))
+
+                while self.currToken._type == TT_COMMA:
+                    res.RegisterAdvance()
+                    self.Advance()
+
+                    inputVar.append(res.Register(self.Expr()))
+                    if res.error: res
+
+                if not self.currToken._type == TT_RPAREN:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected an ')'"
+                    ))
+
+                res.RegisterAdvance()
+                self.Advance()
+            return res.Success(FuncCallNode(atom, inputVar))
+        return res.Success(atom)
+
     def Power (self):
-        return self.BinOp(self.Atom, (TT_POWER, ), self.Factor)
+        return self.BinOp(self.Call, (TT_POWER, ), self.Factor)
 
     def Factor (self):
         res = ParseResult()
@@ -811,7 +972,7 @@ class Parser:
         if res.error:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
-                "Expected an Int | Float | 'let' | Identifier | '+' | '-' | '('"
+                "Expected an Int | Float | 'let' | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function'"
             ))
 
         return res.Success(node)
@@ -858,9 +1019,8 @@ class RTResult:
 #                                    VALUES                                    #
 ################################################################################
 
-class Number:
-    def __init__ (self, value):
-        self.value = value
+class Value:
+    def __init__ (self):
         self.SetPosition()
         self.SetContext(None)
 
@@ -869,21 +1029,82 @@ class Number:
         self.posEnd   = posEnd
         return self
 
-    def SetContext (self, context):
+    def SetContext (self, context = None):
         self.context = context
         return self
 
     def AddedTo (self, B):
+        return None, self.IllegalOperation(B)
+
+    def SubtractedBy (self, B):
+        return None, self.IllegalOperation(B)
+
+    def MultipliedBy (self, B):
+        return None, self.IllegalOperation(B)
+
+    def Factorial (self):
+        return None, self.IllegalOperation(B)
+
+    def PowerOf (self, B):
+        return None, self.IllegalOperation(B)
+
+    def DividedBy (self, B):
+        return None, self.IllegalOperation(B)
+
+    def ModulusOf (self, B):
+        return None, self.IllegalOperation(B)
+
+    def GetComparison (self, tokType, B):
+        return None, self.IllegalOperation(B)
+
+    def AndedBy (self, B):
+        return None, self.IllegalOperation(B)
+
+    def OredBy (self, B):
+        return None, self.IllegalOperation(B)
+
+    def Notted (self):
+        return None, self.IllegalOperation(B)
+
+    def Execute (self):
+        return None, self.IllegalOperation()
+
+    def Copy (self):
+        raise Exception('No copy method defined')
+
+    def IsTrue (self):
+        return False
+
+    def IllegalOperation (self, B = None):
+        if not B: B = self
+        return RunTimeError(
+            self.posStart, self.posEnd,
+            "Illegal Operation",
+            self.context
+        )
+
+class Number(Value):
+    def __init__ (self, value):
+        super().__init__()
+        self.value = value
+
+    def AddedTo (self, B):
         if isinstance(B, Number):
             return Number(self.value + B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def SubtractedBy (self, B):
         if isinstance(B, Number):
             return Number(self.value - B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def MultipliedBy (self, B):
         if isinstance(B, Number):
             return Number(self.value * B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def Factorial (self):
         factorial = 1
@@ -902,6 +1123,8 @@ class Number:
     def PowerOf (self, B):
         if isinstance(B, Number):
             return Number(self.value ** B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def DividedBy (self, B):
         if isinstance(B, Number):
@@ -912,6 +1135,8 @@ class Number:
                     self.context
                 )
             return Number(self.value / B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def ModulusOf (self, B):
         if isinstance(B, Number):
@@ -922,29 +1147,37 @@ class Number:
                     self.context
                 )
             return Number(self.value % B.value).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def GetComparison(self, tokType, B):
         if isinstance(B, Number):
             if tokType == TT_EE:
                 return Number(int(self.value == B.value)).SetContext(self.context), None
-            if tokType == TT_NE:
+            elif tokType == TT_NE:
                 return Number(int(self.value != B.value)).SetContext(self.context), None
-            if tokType == TT_LT:
+            elif tokType == TT_LT:
                 return Number(int(self.value < B.value)).SetContext(self.context), None
-            if tokType == TT_GT:
+            elif tokType == TT_GT:
                 return Number(int(self.value > B.value)).SetContext(self.context), None
-            if tokType == TT_LTE:
+            elif tokType == TT_LTE:
                 return Number(int(self.value <= B.value)).SetContext(self.context), None
-            if tokType == TT_GTE:
+            elif tokType == TT_GTE:
                 return Number(int(self.value >= B.value)).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def AndedBy(self, B):
         if isinstance(B, Number):
             return Number(int(self.value and B.value)).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def OredBy(self, B):
         if isinstance(B, Number):
             return Number(int(self.value or B.value)).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def Notted(self):
         return Number(1 if self.value == 0 else 0).SetContext(self.context), None
@@ -960,6 +1193,45 @@ class Number:
 
     def __repr__ (self):
         return str(self.value)
+
+class Function(Value):
+    def __init__ (self, name, bodyNode, argNames):
+        self.name     = name
+        self.bodyNode = bodyNode
+        self.argNames = argNames
+
+    def Execute(self, args):
+        res = RTResult()
+        interpreter  = Interpreter()
+        newContext   = Context(self.name, self.context, self.posStart)
+        newContext.symbolTable = SymbolTable(newContext.parent.symbolTable)
+
+        if len(args) != len(self.argNames):
+            return res.Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                f"Expected {len(self.argNames)} but recieved {len(args)}",
+                self.context
+            ))
+
+        for i in range(len(args)):
+            argName  = self.argNames[i]
+            argValue = args[i]
+            argValue.SetContext(newContext)
+            newContext.symbolTable.set(argName, argValue)
+
+        value = res.Register(interpreter.Visit(self.bodyNode, newContext))
+        if res.error: return res
+
+        return res.Success(value)
+
+    def Copy (self):
+        copy = Function(self.name, self.bodyNode, self.argNames)
+        copy.SetContext(self.context)
+        copy.SetPosition(self.posStart, self.posEnd)
+        return copy
+
+    def __repr__ (self):
+        return f"<function {self.name}>"
 
 ################################################################################
 #                                   CONTEXT                                    #
@@ -977,9 +1249,9 @@ class Context:
 ################################################################################
 
 class SymbolTable:
-    def __init__ (self):
+    def __init__ (self, parent = None):
         self.symbols = {}
-        self.parent  = None # Global Variables
+        self.parent  = parent
 
     def get (self, name):
         value = self.symbols.get(name, None)
@@ -1161,6 +1433,38 @@ class Interpreter:
 
         return res.Success(None)
 
+    def visit_FuncDefNode (self, node, context):
+        res = RTResult()
+
+        funcName = node.funcNameTok.value
+        bodyNode = node.bodyNode
+        argNames = [argName.value for argName in node.argNameToks]
+        funcValue = Function(funcName, bodyNode, argNames)
+        funcValue.SetContext(context)
+        funcValue.SetPosition(node.posStart, node.posEnd)
+
+        context.symbolTable.set(funcName, funcValue)
+
+        return res.Success(funcValue)
+
+    def visit_FuncCallNode (self, node, context):
+        res = RTResult()
+        args = []
+
+        valueToCall = res.Register(self.Visit(node.nodeToCall, context))
+        if res.error: return res
+
+        valueToCall = valueToCall.Copy().SetPosition(node.posStart, node.posEnd)
+
+        for argNode in node.argNodes:
+            args.append(res.Register(self.Visit(argNode, context)))
+            if res.error: return res
+
+        returnValue = res.Register(valueToCall.Execute(args))
+        if res.error: return res
+
+        return res.Success(returnValue)
+
 ################################################################################
 #                                    Main                                      #
 ################################################################################
@@ -1172,7 +1476,10 @@ globalSymbolTable.set("True", Number(0))
 globalSymbolTable.set("False", Number(0))
 
 def Run (fname, text, debug = None):
-    DEBUG = 1 if debug else 0
+    # if debug:
+    #     DEBUG = 1
+    # else:
+    #     DEBUG = 0
 
     # Generate Tokens
     lexar         = Lexar(fname, text)
