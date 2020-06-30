@@ -206,6 +206,8 @@ class Lexar:
                 tokens.append(self.MakeNumber())
             elif self.currChar in LETTERS:
                 tokens.append(self.MakeIdentifier())
+            elif self.currChar == '"':
+                tokens.append(self.MakeString())
             elif self.currChar == '+':
                 tokens.append(Token(TT_PLUS,      posStart = self.currPos))
                 self.Advance()
@@ -294,7 +296,7 @@ class Lexar:
             return(Token(TT_FLOAT, float(numStr), posStart, self.currPos))
 
     def MakeIdentifier (self):
-        idStr = ''
+        idStr    = ''
         posStart = self.currPos.Copy()
 
         while self.currChar != None and self.currChar in LETTERS_DIGITS + '_':
@@ -307,6 +309,34 @@ class Lexar:
             tokType = TT_IDENTIFIER
 
         return Token(tokType, idStr, posStart, self.currPos)
+
+    def MakeString (self):
+        str        = ''
+        posStart   = self.currPos.Copy()
+        escapeChar = False
+        self.Advance()
+
+        escapeChars = {
+			'n': '\n',
+			't': '\t'
+		}
+
+        while self.currChar != None and (self.currChar != '"' or escapeChar):
+            if escapeChar:
+
+                str += escapeChars.get(self.currChar, self.currChar)
+            else:
+                if self.currChar == '\\':
+                    escapeChar = True
+                else:
+                    str += self.currChar
+                    self.Advance()
+
+            escapeChar = False
+
+        self.Advance()
+
+        return Token(TT_STRING, str, posStart, self.currPos)
 
     def MakeNotEquals (self):
         posStart = self.currPos.Copy()
@@ -357,6 +387,14 @@ class Lexar:
 ################################################################################
 
 class NumberNode:
+    def __init__ (self, tok):
+        self.tok       = tok
+        self.posStart  = self.tok.posStart
+        self.posEnd    = self.tok.posEnd
+    def __repr__ (self):
+        return f'{self.tok}'
+
+class StringNode:
     def __init__ (self, tok):
         self.tok       = tok
         self.posStart  = self.tok.posStart
@@ -476,7 +514,7 @@ class FuncCallNode:
 #                                                   -
 # call       : atom (LPARN (expr(COMMA expr)*)?RPAREN)?
 #                                                   -
-# Atom       : INT | FLOAT | IDENTIFIER             -
+# Atom       : INT | FLOAT | STRING | IDENTIFIER    -
 #            : LPAREN expr RPAREN                   -
 #            : If-expr                              -
 #            : For-expr                             -
@@ -801,6 +839,11 @@ class Parser:
             res.RegisterAdvance()
             self.Advance()
             return res.Success(NumberNode(tok))
+
+        elif tok._type == TT_STRING:
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(StringNode(tok))
 
         elif tok._type == TT_IDENTIFIER:
             res.RegisterAdvance()
@@ -1194,6 +1237,35 @@ class Number(Value):
     def __repr__ (self):
         return str(self.value)
 
+class String(Value):
+    def __init__ (self, value):
+        super().__init__()
+        self.value = value
+
+    def AddedTo (self, B):
+        if isinstance(B, String):
+            return String(self.value + B.value).SetContext(self.context), None
+        else:
+            return None, IllegalOperation(self, B)
+
+    def MultipliedBy (self, B):
+        if isinstance(B, Number):
+            return String(self.value * B.value).SetContext(self.context), None
+        else:
+            return None, IllegalOperation(self, B)
+
+    def IsTrue (self):
+        return len(self.value) > 0
+
+    def Copy (self):
+        copy = String(self.value)
+        copy.SetContext(self.context)
+        copy.SetPosition(self.posStart, self.posEnd)
+        return copy
+
+    def __repr__ (self):
+        return f'"{self.value}"'
+
 class Function(Value):
     def __init__ (self, name, bodyNode, argNames):
         self.name     = name
@@ -1285,6 +1357,11 @@ class Interpreter:
             Number(node.tok.value).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
+    def visit_StringNode (self, node, context):
+        return RTResult().Success(
+            String(node.tok.value).SetContext(context).SetPosition(node.posStart, node.posEnd)
+        )
+
     def visit_VarAssignNode (self, node, context):
         res     = RTResult()
         varName = node.varNameTok.value
@@ -1318,7 +1395,6 @@ class Interpreter:
 
         error = None
         tokType = node.opTok._type
-
         if tokType   == TT_PLUS:
             result, error = left.AddedTo(right)
         elif tokType == TT_MINUS:
