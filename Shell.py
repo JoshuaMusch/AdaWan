@@ -19,6 +19,6 @@ while run:
         if error:
             print(error.AsString())
         elif result:
-            print(result)
+            print(repr(result))
     else:
         run = 0

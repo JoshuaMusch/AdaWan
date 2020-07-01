@@ -1,4 +1,6 @@
 import string
+import os
+import math
 
 ################################################################################
 #                                   CONSTANTS                                  #
@@ -1065,7 +1067,7 @@ class RTResult:
 class Value:
     def __init__ (self):
         self.SetPosition()
-        self.SetContext(None)
+        self.SetContext()
 
     def SetPosition (self, posStart = None, posEnd = None):
         self.posStart = posStart
@@ -1237,6 +1239,11 @@ class Number(Value):
     def __repr__ (self):
         return str(self.value)
 
+Number.null  = Number(   0   )
+Number.false = Number(   0   )
+Number.true  = Number(   1   )
+Number.pi    = Number(math.pi)
+
 class String(Value):
     def __init__ (self, value):
         super().__init__()
@@ -1263,35 +1270,61 @@ class String(Value):
         copy.SetPosition(self.posStart, self.posEnd)
         return copy
 
+    def __str__ (self):
+        return self.value
+
     def __repr__ (self):
         return f'"{self.value}"'
 
-class Function(Value):
+class BaseFunction(Value):
+    def __init__ (self, name):
+        self.name = name
+        super().__init__()
+
+    def GenerateNewContext (self):
+        newContext = Context(self.name, self.context, self.posStart)
+        newContext.symbolTable = SymbolTable(newContext.parent.symbolTable)
+        return newContext
+
+    def CheckArgs (self, argNames, args):
+        res = RTResult()
+        if len(args) != len(argNames):
+            return res.Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                f"Expected {len(argNames)} but recieved {len(args)}",
+                self.context
+            ))
+        return res.Success(None)
+
+    def PopulateArgs(self, argNames, args, exeContext):
+        for i in range(len(args)):
+            argName  = argNames[i]
+            argValue = args[i]
+            argValue.SetContext(exeContext)
+            exeContext.symbolTable.set(argName, argValue)
+
+    def CheckAndPopulateArgs(self, argNames, args, exeContext):
+        res = RTResult()
+        res.Register(self.CheckArgs(argNames, args))
+        if res.error: return res
+        self.PopulateArgs(argNames, args, exeContext)
+        return res.Success(None)
+
+class Function(BaseFunction):
     def __init__ (self, name, bodyNode, argNames):
-        self.name     = name
+        super().__init__(name)
         self.bodyNode = bodyNode
         self.argNames = argNames
 
     def Execute(self, args):
-        res = RTResult()
-        interpreter  = Interpreter()
-        newContext   = Context(self.name, self.context, self.posStart)
-        newContext.symbolTable = SymbolTable(newContext.parent.symbolTable)
+        res         = RTResult()
+        interpreter = Interpreter()
+        exeContext  = self.GenerateNewContext()
 
-        if len(args) != len(self.argNames):
-            return res.Failure(RunTimeError(
-                self.posStart, self.posEnd,
-                f"Expected {len(self.argNames)} but recieved {len(args)}",
-                self.context
-            ))
+        res.Register(self.CheckAndPopulateArgs(self.argNames, args, exeContext))
+        if res.error: return res
 
-        for i in range(len(args)):
-            argName  = self.argNames[i]
-            argValue = args[i]
-            argValue.SetContext(newContext)
-            newContext.symbolTable.set(argName, argValue)
-
-        value = res.Register(interpreter.Visit(self.bodyNode, newContext))
+        value = res.Register(interpreter.Visit(self.bodyNode, exeContext))
         if res.error: return res
 
         return res.Success(value)
@@ -1305,6 +1338,172 @@ class Function(Value):
     def __repr__ (self):
         return f"<function {self.name}>"
 
+class BuiltInFunction(BaseFunction):
+    def __init__ (self, name):
+        super().__init__(name)
+
+    def Execute(self, args):
+        res         = RTResult()
+        exeContext  = self.GenerateNewContext()
+
+        methodName = f'Execute_{self.name}'
+        method     = getattr(self, methodName, self.NoVisitMethod)
+
+        res.Register(self.CheckAndPopulateArgs(method.argNames, args, exeContext))
+        if res.error: return res
+
+        returnValue = res.Register(method(exeContext))
+        if res.error: return res
+
+        return res.Success(returnValue)
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+
+    def NoVisitMethod (self, node, context):
+        raise exception(f'No Execute_{type(node).__name__} method defined')
+
+    def Execute_Print (self, exeContext):
+        print(str(exeContext.symbolTable.get('value')))
+        return RTResult().Success(Number.null)
+    Execute_Print.argNames = ['value']
+
+    def Execute_PrintReturn (self, exeContext):
+        return RTResult().Success(String(str(exeContext.symbolTable.get('value'))))
+    Execute_PrintReturn.argNames = ['value']
+
+    def Execute_Input (self, exeContext):
+        text = input()
+        return RTResult().Sucess(String(text))
+    Execute_Input.argNames = []
+
+    def Execute_InputInt (self, exeContext):
+        while True:
+            text = input()
+            try:
+                number = int(text)
+                break
+            except ValueError:
+                print(f"'{text}' must be an integer. Try again!")
+        return RTResult().Success(Number(number))
+    Execute_InputInt.argNames = []
+
+    def Execute_Clear (self, exeContext):
+        os.system('cls' if os.name == 'nt' else 'clear')
+        return RTResult().Success(Number.null)
+    Execute_Clear.argNames = []
+
+    def Execute_IsNum (self, exeContext):
+        isNum = isinstance(exeContext.symbolTable.get("value"), Number)
+        return RTResult().Success(Number.true if isNum else Number.false)
+    Execute_IsNum.argNames = ['value']
+
+    def Execute_IsStr (self, exeContext):
+        isStr = isinstance(exeContext.symbolTable.get("value"), String)
+        return RTResult().Success(Number.true if isStr else Number.false)
+    Execute_IsStr.argNames = ['value']
+
+    def Execute_IsFunc (self, exeContext):
+        isFunc = isinstance(exeContext.symbolTable.get("value"), BaseFunction)
+        return RTResult().Success(Number.true if isFunc else Number.false)
+    Execute_IsFunc.argNames = ['value']
+
+    # def Execute_IsList (self, exeContext):
+    #     isList = isinstance(exeContext.symbolTable.get("value"), List)
+    #     return RTResult().Success(Number.true if isList else Number.false)
+    # Exec_IsList.argNames = ['value']
+
+    # def Execute_Append (self, exeContext):
+    #     _list = exec_ctx.symbolTable.get("list")
+    #     value = exec_ctx.symbolTable.get("value")
+    #
+    #     if not isinstance(_list, List):
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "First Argument must be a list",
+    #             exeContext
+    #         ))
+    #
+    #     _list.elements.append(value)
+    #     return RTResult().Sucess(Number.null)
+    # Execute_Append.argNames = ['list','value']
+
+    # def Execute_Pop (self, exeContext):
+    #     _list = exec_ctx.symbolTable.get("list")
+    #     index = exec_ctx.symbolTable.get("index")
+    #
+    #     if not isinstance(_list, List):
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "the First Argument must be a list",
+    #             exeContext
+    #         ))
+    #
+    #     if not isinstance(index, Number):
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "the Second Argument must be a number",
+    #             exeContext
+    #         ))
+    #
+    #     try:
+    #         element = _list.elements.pop(index.value)
+    #     except:
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "Element could not be removed. The index is out of scope",
+    #             exeContext
+    #         ))
+    #
+    #     return RTResult().Sucess(element)
+    # Execute_Pop.argNames = ['list','index']
+
+    # def Execute_Pop (self, exeContext):
+    #     _list = exec_ctx.symbolTable.get("listA")
+    #     index = exec_ctx.symbolTable.get("listB")
+    #
+    #     if not isinstance(listA, List):
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "the First Argument must be a list",
+    #             exeContext
+    #         ))
+    #
+    #     if not isinstance(listB, List):
+    #         return RTResult().Failure(RunTimeError(
+    #             self.posStart, self.posEnd,
+    #             "the Second Argument must be a list",
+    #             exeContext
+    #         ))
+    #
+    #     listA.elements.extend(listB.elements)
+    #
+    #     return RTResult().Sucess(Number.null)
+    # Execute_Pop.argNames = ['listA','listB']
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+
+    def Copy (self):
+        copy = BuiltInFunction(self.name)
+        copy.SetContext(self.context)
+        copy.SetPosition(self.posStart, self.posEnd)
+        return copy
+
+    def __repr__ (self):
+        return f"<built-in function {self.name}>"
+
+BuiltInFunction.Print       = BuiltInFunction("Print")
+BuiltInFunction.PrintReturn = BuiltInFunction("PrintReturn")
+BuiltInFunction.Input       = BuiltInFunction("Input")
+BuiltInFunction.InputInt    = BuiltInFunction("InputInt")
+BuiltInFunction.Clear       = BuiltInFunction("Clear")
+BuiltInFunction.IsNum       = BuiltInFunction("IsNum")
+BuiltInFunction.IsStr       = BuiltInFunction("IsStr")
+BuiltInFunction.IsFunc      = BuiltInFunction("IsFunc")
+# BuiltInFunction.IsList      = BuiltInFunction("IsList")
+# BuiltInFunction.Append      = BuiltInFunction("Append")
+# BuiltInFunction.Pop         = BuiltInFunction("Pop")
+# BuiltInFunction.Extend      = BuiltInFunction("Extend")
+
 ################################################################################
 #                                   CONTEXT                                    #
 ################################################################################
@@ -1315,6 +1514,9 @@ class Context:
         self.parent         = parent
         self.parentEntryPos = parentEntryPos
         self.symbolTable    = None
+
+    def __repr__ (self):
+        return f"Name:{self.dispName}, Parent:({self.parent}: {self.parentEntryPos})"
 
 ################################################################################
 #                                 SYMBOL TABLE                                 #
@@ -1343,7 +1545,7 @@ class SymbolTable:
 
 class Interpreter:
     def Visit (self, node, context):
-        methodName = f'visit_{type(node).__name__}'
+        methodName = f'Visit_{type(node).__name__}'
         method     = getattr(self, methodName, self.NoVisitMethod)
         return method(node, context)
 
@@ -1352,17 +1554,17 @@ class Interpreter:
     def NoVisitMethod (self, node, context):
         raise exception(f'No visit_{type(node).__name__} method defined')
 
-    def visit_NumberNode (self, node, context):
+    def Visit_NumberNode (self, node, context):
         return RTResult().Success(
             Number(node.tok.value).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
-    def visit_StringNode (self, node, context):
+    def Visit_StringNode (self, node, context):
         return RTResult().Success(
             String(node.tok.value).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
-    def visit_VarAssignNode (self, node, context):
+    def Visit_VarAssignNode (self, node, context):
         res     = RTResult()
         varName = node.varNameTok.value
         value   = res.Register(self.Visit(node.valueNode, context))
@@ -1371,7 +1573,7 @@ class Interpreter:
         context.symbolTable.set(varName, value)
         return res.Success(value)
 
-    def visit_VarAccessNode (self, node, context):
+    def Visit_VarAccessNode (self, node, context):
         res     = RTResult()
         varName = node.varNameTok.value
         value   = context.symbolTable.get(varName)
@@ -1383,10 +1585,12 @@ class Interpreter:
                 context
             ))
 
-        value = value.Copy(). SetPosition(node.posStart, node.posEnd)
+        value = value.Copy()
+        value.SetContext(context)
+        value.SetPosition(node.posStart, node.posEnd)
         return res.Success(value)
 
-    def visit_BinOpNode (self, node, context):
+    def Visit_BinOpNode (self, node, context):
         res   = RTResult()
         left  = res.Register(self.Visit(node.leftNode, context))
         if res.error: return res
@@ -1429,7 +1633,7 @@ class Interpreter:
         else:
             return res.Success(result.SetPosition(node.posStart, node.posEnd))
 
-    def visit_UnaryOpNode (self, node, context):
+    def Visit_UnaryOpNode (self, node, context):
         res    = RTResult()
         number = res.Register(self.Visit(node.node, context))
         if res.error: return res
@@ -1437,7 +1641,7 @@ class Interpreter:
         error = None
 
         if node.opTok._type   == TT_MINUS:
-            number, error = number.MultipliedBy(Number(-1).SetContext(context))
+            number, error = number.MultipliedBy(Number(-1))
         elif node.opTok._type == TT_FACTORIAL:
             number, error = number.Factorial()
         elif node.opTok.Matches(TT_KEYWORD, 'NOT') or node.opTok.Matches(TT_KEYWORD, '~'):
@@ -1448,7 +1652,7 @@ class Interpreter:
         else:
             return res.Success(number.SetPosition(node.posStart, node.posEnd))
 
-    def visit_IfNode (self, node, context):
+    def Visit_IfNode (self, node, context):
         res = RTResult()
 
         for condition, expr in node.cases:
@@ -1467,7 +1671,7 @@ class Interpreter:
 
         return res.Success(None)
 
-    def visit_ForNode (self, node, context):
+    def Visit_ForNode (self, node, context):
         res = RTResult()
         startValue = res.Register(self.Visit(node.startNode, context))
         if res.error: return res
@@ -1496,7 +1700,7 @@ class Interpreter:
 
         return res.Success(None)
 
-    def visit_WhileNode (self, node, context):
+    def Visit_WhileNode (self, node, context):
         res = RTResult()
         while True:
             conditionValue = res.Register(self.Visit(node.conditionNode, context))
@@ -1509,7 +1713,7 @@ class Interpreter:
 
         return res.Success(None)
 
-    def visit_FuncDefNode (self, node, context):
+    def Visit_FuncDefNode (self, node, context):
         res = RTResult()
 
         funcName = node.funcNameTok.value
@@ -1523,7 +1727,7 @@ class Interpreter:
 
         return res.Success(funcValue)
 
-    def visit_FuncCallNode (self, node, context):
+    def Visit_FuncCallNode (self, node, context):
         res = RTResult()
         args = []
 
@@ -1539,6 +1743,9 @@ class Interpreter:
         returnValue = res.Register(valueToCall.Execute(args))
         if res.error: return res
 
+        returnValue = returnValue.Copy().SetPosition(node.posStart, node.posEnd).SetContext(context)
+        if res.error: return res
+
         return res.Success(returnValue)
 
 ################################################################################
@@ -1547,9 +1754,22 @@ class Interpreter:
 
 DEBUG             = 0
 globalSymbolTable = SymbolTable()
-globalSymbolTable.set("Null", Number(0))
-globalSymbolTable.set("True", Number(0))
-globalSymbolTable.set("False", Number(0))
+globalSymbolTable.set("Null",        Number.null                  )
+globalSymbolTable.set("True",        Number.true                  )
+globalSymbolTable.set("False",       Number.false                 )
+globalSymbolTable.set("pi",          Number.pi                    )
+globalSymbolTable.set("print",       BuiltInFunction.Print        )
+globalSymbolTable.set("printReturn", BuiltInFunction.PrintReturn  )
+globalSymbolTable.set("input",       BuiltInFunction.Input        )
+globalSymbolTable.set("inputInt",    BuiltInFunction.InputInt     )
+globalSymbolTable.set("clear",       BuiltInFunction.Clear        )
+globalSymbolTable.set("isNum",       BuiltInFunction.IsNum        )
+globalSymbolTable.set("isStr",       BuiltInFunction.IsStr        )
+globalSymbolTable.set("isFunc",      BuiltInFunction.IsFunc       )
+# globalSymbolTable.set("isList",      BuiltInFunction.IsList       )
+# globalSymbolTable.set("append",      BuiltInFunction.Append       )
+# globalSymbolTable.set("pop",         BuiltInFunction."Pop         )
+# globalSymbolTable.set("extend",      BuiltInFunction.Extend       )
 
 def Run (fname, text, debug = None):
     # if debug:
