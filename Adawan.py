@@ -145,6 +145,7 @@ TT_COLON        = 'COLON'
 TT_COMMA        = 'COMMA'
 
 TT_EOF          = 'EOF'
+TT_NEWLINE      = 'NEWLINE'
 
 KEYWORDS = [
     'let',
@@ -156,7 +157,8 @@ KEYWORDS = [
     'elif',
     'for',
     'while',
-    'function'
+    'function',
+    'end'
 ]
 
 class Token:
@@ -205,6 +207,9 @@ class Lexar:
 
         while self.currChar != None:
             if self.currChar in ' \t':
+                self.Advance()
+            if self.currChar in '\n;':
+                tokens.append(Token(TT_NEWLINE,   posStart = self.currPos))
                 self.Advance()
             elif self.currChar in DIGITS:
                 tokens.append(self.MakeNumber())
@@ -444,26 +449,28 @@ class IfNode:
         self.elseCase = elseCase
 
         self.posStart = self.cases[0][0].posStart
-        self.posEnd   = (self.elseCase or cases[len(cases) - 1][0]).posEnd
+        self.posEnd   = (self.elseCase or cases[len(cases) - 1])[0].posEnd
 
 class ForNode:
-    def __init__ (self, iteratorName, startNode, endNode, bodyNode, stepNode = None):
-        self.iteratorName = iteratorName
-        self.startNode    = startNode
-        self.endNode      = endNode
-        self.bodyNode     = bodyNode
-        self.stepNode     = stepNode
+    def __init__ (self, iteratorName, startNode, endNode, bodyNode, stepNode, shouldReturnNull):
+        self.iteratorName     = iteratorName
+        self.startNode        = startNode
+        self.endNode          = endNode
+        self.bodyNode         = bodyNode
+        self.stepNode         = stepNode
+        self.shouldReturnNull = shouldReturnNull
 
-        self.posStart     = iteratorName.posStart
-        self.posEnd       = bodyNode.posEnd
+        self.posStart         = iteratorName.posStart
+        self.posEnd           = bodyNode.posEnd
 
 class WhileNode:
-    def __init__(self, conditionNode, bodyNode):
-        self.conditionNode = conditionNode
-        self.bodyNode      = bodyNode
+    def __init__(self, conditionNode, bodyNode, shouldReturnNull):
+        self.conditionNode    = conditionNode
+        self.bodyNode         = bodyNode
+        self.shouldReturnNull = shouldReturnNull
 
-        self.posStart      = conditionNode.posStart
-        self.posEnd        = bodyNode.posEnd
+        self.posStart         = conditionNode.posStart
+        self.posEnd           = bodyNode.posEnd
 
     def __repr__ (self):
         return f'while: {self.conditionNode}'
@@ -482,10 +489,11 @@ class VarAccessNode:
         self.posEnd     = self.varNameTok.posEnd
 
 class FuncDefNode:
-    def __init__(self, funcNameTok, argNameToks, bodyNode):
-        self.funcNameTok = funcNameTok
-        self.argNameToks = argNameToks
-        self.bodyNode    = bodyNode
+    def __init__(self, funcNameTok, argNameToks, bodyNode, shouldReturnNull):
+        self.funcNameTok      = funcNameTok
+        self.argNameToks      = argNameToks
+        self.bodyNode         = bodyNode
+        self.shouldReturnNull = shouldReturnNull
 
         if len(argNameToks) > 0:
             self.posStart = argNameToks[0].posStart
@@ -511,6 +519,7 @@ class FuncCallNode:
 ################################################################################
 
 # Grammar - - - - - - - - - - - - - - - - - - - - - - - -
+# Statement  : NEWLINE* expr (NEWLINE+ expr)* NEWLINE*
 # Expression : KEYWORD:LET IDENTIFIER EQ expr           -
 #            : comp-expr (AND|OR) comp-expr             -
 #                                                       -
@@ -540,30 +549,50 @@ class FuncCallNode:
 #                                                       -
 # list-expr  : LSQUARE (expr (COMMA expr)*)? RSQAURE    -
 #                                                       -
-# If-expr    : KW: IF expr KW: THEN expr                -
-#            : (KW:ELIF expr KW: THEN expr)*            -
-#            : (KW:ELSE expr KW: THEN expr)?            -
+# If-expr    : KW: IF expr KW: THEN                     -
+#              (expr if-expr-b | if-expr-c?)            -
+#            | (NEWLINE Statements KW: END if-expr-b | if-expr-c)
+#                                                       -
+# If-expr-b  : KW: ELIF expr KW: THEN                   -
+#              (expr if-expr-elif | if-expr-else?)      -
+#            | (NEWLINE Statements KW: END if-expr-elif | if-expr-else)
+#                                                       -
+# If-expr-b  : KW: ELSE                                 -
+#              expr                                     -
+#            | (NEWLINE Statements KW:END)              -
 #                                                       -
 # for-expr   : KW:FOR IDENTIFIER EQ expr KW:TO expr     -
-# 			 : (KW:STEP expr)? KW:THEN expr             -
+# 			   (KW:STEP expr)? KW:THEN                  -
+#              expr                                     -
+#            | (NEWLINE Statements KW:END)              -
 #                                                       -
-# while-expr : KW:WHILE expr KW:THEN expr               -
+# while-expr : KW:WHILE expr KW:THEN                    -
+#              expr                                     -
+#            | (NEWLINE Statements KW:END)              -
 #                                                       -
 # func-def   : KW:function IDENTIFIER                   -
-#                LPAREN (ID (COMMA ID)*)? RPAREN        -
-#                COLON expr                             -
+#                LPAREN (ID (COMMA ID)*)? RPAREN COLON  -
+#                expr                                   -
+#              | (NEWLINE Statements KW:END)            -
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 class ParseResult:
     def __init__ (self):
-        self.error        = None
-        self.node         = None
-        self.advanceCount = 0
+        self.error          = None
+        self.node           = None
+        self.advanceCount   = 0
+        self.toReverseCount = 0
 
     def Register (self, res):
-        self.advanceCount += res.advanceCount
+        self.advanceCount       += res.advanceCount
         if res.error: self.error = res.error
         return res.node
+
+    def TryRegister (self, res):
+        if res.error:
+            self.toReverseCount = res.advanceCount
+            return None
+        return self.Register(res)
 
     def RegisterAdvance (self):
         self.advanceCount += 1
@@ -586,14 +615,22 @@ class Parser:
 
     def Advance (self):
         self.tok_idx += 1
+        self.UpdateCurrToken()
+        return self.currToken
+
+    def Reverse (self, amount = 1):
+        self.tok_idx -= amount
+        self.UpdateCurrToken()
+        return self.currToken
+
+    def UpdateCurrToken (self):
         if self.tok_idx < len(self.tokens):
             self.currToken = self.tokens[self.tok_idx]
-        return self.currToken
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
 
     def Parse (self):
-        res = self.Expr()
+        res = self.Statements()
         if not res.error and self.currToken._type != TT_EOF:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
@@ -602,6 +639,234 @@ class Parser:
         return res
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+
+    def Statements (self):
+        res        = ParseResult()
+        statements = []
+        posStart   = self.currToken.posStart.Copy()
+
+        while self.currToken._type == TT_NEWLINE:
+            res.RegisterAdvance()
+            self.Advance()
+
+        statement = res.Register(self.Expr())
+        if res.error: return res
+        statements.append(statement)
+
+        moreStatements = True
+
+        while True:
+            newlineCount = 0
+            while self.currToken._type == TT_NEWLINE:
+                res.RegisterAdvance()
+                self.Advance()
+                newlineCount += 1
+            if newlineCount == 0:
+                moreStatements = False
+
+            if not moreStatements: break
+
+            statement = res.TryRegister(self.Expr())
+            if not statement:
+                self.reverse(res.toReverseCount)
+                moreStatements = False
+                continue
+            statements.append(statement)
+
+        return res.Success(ListNode(
+            statements,
+            posStart,
+            self.currToken.posEnd.Copy()
+        ))
+
+    def Expr (self):
+        res = ParseResult()
+        if self.currToken.Matches(TT_KEYWORD, 'let'):
+            res.RegisterAdvance()
+            self.Advance()
+
+            if self.currToken._type != TT_IDENTIFIER:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected an Identifier"
+                ))
+            varName = self.currToken
+            res.RegisterAdvance()
+            self.Advance()
+
+            if self.currToken._type != TT_EQ:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected '='"
+                ))
+
+            res.RegisterAdvance()
+            self.Advance()
+            expr = res.Register(self.Expr())
+            if res.error: return res
+            return res.Success(VarAssignNode(varName, expr))
+
+        node = res.Register(self.BinOp(self.CompExpr, ((TT_KEYWORD, 'AND'), (TT_KEYWORD, 'OR'))))
+        # node = res.Register(self.BinOp(self.CompExpr,
+        #     ((TT_KEYWORD, "AND"), (TT_KEYWORD, "&"),
+        #     (TT_KEYWORD, "OR"),  (TT_KEYWORD, "|"))))
+        if res.error:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an Int | Float | 'let' | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function'"
+            ))
+
+        return res.Success(node)
+
+    def CompExpr (self):
+        res = ParseResult()
+        if self.currToken.Matches(TT_KEYWORD, 'NOT') or self.currToken.Matches(TT_KEYWORD, '~'):
+            opTok = self.currToken
+            res.RegisterAdvance()
+            self.Advance()
+
+            node = res.Register(self.CompExpr())
+            if res.error: return res
+            return res.Success(UnaryOpNode(opTok, node))
+
+        node = res.Register(self.BinOp(self.ArithExpr, (TT_EE, TT_NE, TT_GT, TT_GTE, TT_LT, TT_LTE)))
+        if res.error:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an Int | Float | Identifier | '+' | '-' | '(' | 'NOT'"
+            ))
+
+        return res.Success(node)
+
+    def ArithExpr(self):
+        return self.BinOp(self.Term, (TT_PLUS, TT_MINUS))
+
+    def Term (self):
+        return self.BinOp(self.Factor, (TT_MUL, TT_DIV, TT_MOD))
+
+    def Factor (self):
+        res = ParseResult()
+        tok = self.currToken
+        if tok._type in (TT_PLUS, TT_MINUS):
+            res.RegisterAdvance()
+            self.Advance()
+            factor = res.Register(self.Factor())
+            if res.error: return res
+            return res.Success(UnaryOpNode(tok, factor))
+        elif tok._type == TT_FACTORIAL:
+            res.RegisterAdvance()
+            self.Advance()
+            factor = res.Register(self.Factor())
+            if res.error: return res
+            return res.Success(UnaryOpNode(tok, factor))
+
+        return self.Power()
+
+    def Power (self):
+        return self.BinOp(self.Call, (TT_POWER, ), self.Factor)
+
+    def Call (self):
+        res = ParseResult()
+        atom = res.Register(self.Atom())
+        if res.error: return res
+
+        if self.currToken._type == TT_LPAREN:
+            res.RegisterAdvance()
+            self.Advance()
+            inputVar = []
+
+            if self.currToken._type == TT_RPAREN:
+                res.RegisterAdvance()
+                self.Advance()
+            else:
+                inputVar.append(res.Register(self.Expr()))
+                if res.error:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected a '(' | 'let' | 'if' | 'for' | 'while' | 'function' | int | float | identifier"
+                    ))
+
+                while self.currToken._type == TT_COMMA:
+                    res.RegisterAdvance()
+                    self.Advance()
+
+                    inputVar.append(res.Register(self.Expr()))
+                    if res.error: res
+
+                if not self.currToken._type == TT_RPAREN:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected an ')'"
+                    ))
+
+                res.RegisterAdvance()
+                self.Advance()
+            return res.Success(FuncCallNode(atom, inputVar))
+        return res.Success(atom)
+
+    def Atom (self):
+        res = ParseResult()
+        tok = self.currToken
+        if tok._type in (TT_INT, TT_FLOAT):
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(NumberNode(tok))
+
+        elif tok._type == TT_STRING:
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(StringNode(tok))
+
+        elif tok._type == TT_IDENTIFIER:
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(VarAccessNode(tok))
+
+        elif tok._type == TT_LPAREN:
+            res.RegisterAdvance()
+            self.Advance()
+            expr = res.Register(self.Expr())
+            if res.error: return res
+
+            if self.currToken._type == TT_RPAREN:
+                res.RegisterAdvance()
+                self.Advance()
+                return res.Success(expr)
+            else:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected ')'"
+                ))
+
+        elif tok._type == TT_LSQUARE:
+            listExpr = res.Register(self.ListExpr())
+            if res.error: return res
+            return res.Success(listExpr)
+
+        elif tok.Matches(TT_KEYWORD, "if"):
+            ifExpr = res.Register(self.IfExpr())
+            if res.error: return res
+            return res.Success(ifExpr)
+
+        elif tok.Matches(TT_KEYWORD, "for"):
+            forExpr = res.Register(self.ForExpr())
+            if res.error: return res
+            return res.Success(forExpr)
+
+        elif tok.Matches(TT_KEYWORD, "while"):
+            WhileExpr = res.Register(self.WhileExpr())
+            if res.error: return res
+            return res.Success(WhileExpr)
+
+        elif tok.Matches(TT_KEYWORD, "function"):
+            funcDef = res.Register(self.FuncDef())
+            if res.error: return res
+            return res.Success(funcDef)
+
+        return res.Failure(InvalidSyntaxError(
+            tok.posStart, tok.posEnd,
+            "Expected an Int | Float | Identifier | '+' | '-' | '(' | '[' | 'if' | 'for' | 'while' | 'function'"
+        ))
 
     def FuncDef (self):
         res      = ParseResult()
@@ -680,10 +945,28 @@ class Parser:
         res.RegisterAdvance()
         self.Advance()
 
+        if self.currToken._type == TT_NEWLINE:
+            res.RegisterAdvance()
+            self.Advance()
+
+            body = res.Register(self.Statements())
+            if res.error: return res
+
+            if not self.currToken.matches(TT_KEYWORD, 'end'):
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected 'end'"
+                ))
+
+            res.RegisterAdvance()
+            self.Advance()
+
+            return res.Success(FuncDefNode(funcName, inputVar, body, True))
+
         body = res.Register(self.Expr())
         if res.error: return res
 
-        return res.Success(FuncDefNode(funcName, inputVar, body))
+        return res.Success(FuncDefNode(funcName, inputVar, body, False))
 
     def ListExpr (self):
         res          = ParseResult()
@@ -734,13 +1017,20 @@ class Parser:
 
     def IfExpr (self):
         res      = ParseResult()
+        allCases = res.Register(self.IfExprCases('if'))
+        if res.error: return res
+        cases, elseCase = allCases
+
+        return res.Success(IfNode(cases, elseCase))
+
+    def IfExprCases (self, caseKeyword):
+        res      = ParseResult()
         cases    = []
         elseCase = None
-
-        if not self.currToken.Matches(TT_KEYWORD, "if"):
+        if not self.currToken.Matches(TT_KEYWORD, caseKeyword):
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
-                "Expected 'if'"
+                f"Expected '{caseKeyword}'"
             ))
 
         res.RegisterAdvance()
@@ -758,38 +1048,82 @@ class Parser:
         res.RegisterAdvance()
         self.Advance()
 
-        expr = res.Register(self.Expr())
-        if res.error: return res
-        cases.append((condition, expr))
-
-        while self.currToken.Matches(TT_KEYWORD, "elif"):
+        if self.currToken._type == TT_NEWLINE:
             res.RegisterAdvance()
             self.Advance()
 
-            condition = res.Register(self.Expr())
+            statements = res.Register(self.Statements())
             if res.error: return res
+            cases.append((condition, statements, True))
 
-            if not self.currToken._type == TT_COLON:
-                return res.Failure(InvalidSyntaxError(
-                    self.currToken.posStart, self.currToken.posEnd,
-                    "Expected ':'"
-                ))
-
-            res.RegisterAdvance()
-            self.Advance()
-
+            if self.currToken.Matches(TT_KEYWORD, 'END'):
+                res.RegisterAdvance()
+                self.Advance()
+            else:
+                allCases = res.Register(self.IfExprBC())
+                if res.error: return res
+                newCases, elseCase = allCases
+                cases.extend(newCases)
+        else:
             expr = res.Register(self.Expr())
             if res.error: return res
-            cases.append((condition, expr))
+            cases.append((condition, expr, False))
+
+            allCases = res.Register(self.IfExprBC())
+            if res.error: return res
+            newCases, elseCase = allCases
+            cases.extend(newCases)
+
+        return res.Success((cases, elseCase))
+
+    def IfExprB (self):
+        return self.IfExprCases('elif')
+
+    def IfExprC (self):
+        res      = ParseResult()
+        elseCase = None
 
         if self.currToken.Matches(TT_KEYWORD,"else"):
             res.RegisterAdvance()
             self.Advance()
 
-            elseCase = res.Register(self.Expr())
+            if self.currToken._type == TT_NEWLINE:
+                res.RegisterAdvance()
+                self.Advance()
+
+                statements = res.Register(self.statements)
+                if res.error: return res
+                elseCase   = (statements, True)
+
+                if self.currToken.Matches(TT_KEYWORD, 'end'):
+                    res.RegisterAdvance()
+                    self.Advance()
+                else:
+                    return res.Failure(InvalidSyntaxError(
+                        self.currToken.posStart, self.currToken.posEnd,
+                        "Expected 'end'"
+                    ))
+            else:
+                expr     = res.Register(self.Expr())
+                if res.error: return res
+                elseCase = (expr, False)
+
+        return res.Success(elseCase)
+
+    def IfExprBC (self):
+        res      = ParseResult()
+        cases    = []
+        elseCase = None
+
+        if self.currToken.Matches(TT_KEYWORD, 'elif'):
+            allCases = res.Register(self.IfExprB())
+            if res.error: return res
+            allCases, elseCase = allCases
+        else:
+            elseCase = res.Register(self.IfExprC())
             if res.error: return res
 
-        return res.Success(IfNode(cases, elseCase))
+        return res.Success((cases, elseCase))
 
     def ForExpr (self):
         res = ParseResult()
@@ -865,10 +1199,28 @@ class Parser:
         res.RegisterAdvance()
         self.Advance()
 
+        if self.currToken._type == TT_NEWLINE:
+            res.RegisterAdvance()
+            self.Advance()
+
+            body = res.Register(self.Statements())
+            if res.error: return res
+
+            if not self.currToken.matches(TT_KEYWORD, 'end'):
+                return res.Failure(InvalidSyntaxError(
+                    self.current_tok.posStart, self.current_tok.posEnd,
+                    f"Expected 'end'"
+                ))
+
+            res.register_advancement()
+            self.advance()
+
+            return res.success(ForNode(varName, startValue, endValue, body, stepValue, True))
+
         body = res.Register(self.Expr())
         if res.error: return res
 
-        return res.Success(ForNode(varName, startValue, endValue, body, stepValue))
+        return res.Success(ForNode(varName, startValue, endValue, body, stepValue, False))
 
     def WhileExpr (self):
         res = ParseResult()
@@ -893,199 +1245,28 @@ class Parser:
         res.RegisterAdvance()
         self.Advance()
 
+        if self.currToken._type == TT_NEWLINE:
+            res.RegisterAdvance()
+            self.Advance()
+
+            body = res.Register(self.Statements())
+            if res.error: return res
+
+            if not self.currToken.matches(TT_KEYWORD, 'end'):
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected 'end'"
+                ))
+
+            res.RegisterAdvance()
+            self.Advance()
+
+            return res.Success(WhileNode(condition, body, True))
+
         body = res.Register(self.Expr())
         if res.error: return res
 
-        return res.Success(WhileNode(condition, body))
-
-    def Atom (self):
-        res = ParseResult()
-        tok = self.currToken
-        if tok._type in (TT_INT, TT_FLOAT):
-            res.RegisterAdvance()
-            self.Advance()
-            return res.Success(NumberNode(tok))
-
-        elif tok._type == TT_STRING:
-            res.RegisterAdvance()
-            self.Advance()
-            return res.Success(StringNode(tok))
-
-        elif tok._type == TT_IDENTIFIER:
-            res.RegisterAdvance()
-            self.Advance()
-            return res.Success(VarAccessNode(tok))
-
-        elif tok._type == TT_LPAREN:
-            res.RegisterAdvance()
-            self.Advance()
-            expr = res.Register(self.Expr())
-            if res.error: return res
-
-            if self.currToken._type == TT_RPAREN:
-                res.RegisterAdvance()
-                self.Advance()
-                return res.Success(expr)
-            else:
-                return res.Failure(InvalidSyntaxError(
-                    self.currToken.posStart, self.currToken.posEnd,
-                    "Expected ')'"
-                ))
-
-        elif tok._type == TT_LSQUARE:
-            listExpr = res.Register(self.ListExpr())
-            if res.error: return res
-            return res.Success(listExpr)
-
-        elif tok.Matches(TT_KEYWORD, "if"):
-            ifExpr = res.Register(self.IfExpr())
-            if res.error: return res
-            return res.Success(ifExpr)
-
-        elif tok.Matches(TT_KEYWORD, "for"):
-            forExpr = res.Register(self.ForExpr())
-            if res.error: return res
-            return res.Success(forExpr)
-
-        elif tok.Matches(TT_KEYWORD, "while"):
-            WhileExpr = res.Register(self.WhileExpr())
-            if res.error: return res
-            return res.Success(WhileExpr)
-
-        elif tok.Matches(TT_KEYWORD, "function"):
-            funcDef = res.Register(self.FuncDef())
-            if res.error: return res
-            return res.Success(funcDef)
-
-        return res.Failure(InvalidSyntaxError(
-            tok.posStart, tok.posEnd,
-            "Expected an Int | Float | Identifier | '+' | '-' | '(' | '[' | 'if' | 'for' | 'while' | 'function'"
-        ))
-
-    def Call (self):
-        res = ParseResult()
-        atom = res.Register(self.Atom())
-        if res.error: return res
-
-        if self.currToken._type == TT_LPAREN:
-            res.RegisterAdvance()
-            self.Advance()
-            inputVar = []
-
-            if self.currToken._type == TT_RPAREN:
-                res.RegisterAdvance()
-                self.Advance()
-            else:
-                inputVar.append(res.Register(self.Expr()))
-                if res.error:
-                    return res.Failure(InvalidSyntaxError(
-                        self.currToken.posStart, self.currToken.posEnd,
-                        "Expected a '(' | 'let' | 'if' | 'for' | 'while' | 'function' | int | float | identifier"
-                    ))
-
-                while self.currToken._type == TT_COMMA:
-                    res.RegisterAdvance()
-                    self.Advance()
-
-                    inputVar.append(res.Register(self.Expr()))
-                    if res.error: res
-
-                if not self.currToken._type == TT_RPAREN:
-                    return res.Failure(InvalidSyntaxError(
-                        self.currToken.posStart, self.currToken.posEnd,
-                        "Expected an ')'"
-                    ))
-
-                res.RegisterAdvance()
-                self.Advance()
-            return res.Success(FuncCallNode(atom, inputVar))
-        return res.Success(atom)
-
-    def Power (self):
-        return self.BinOp(self.Call, (TT_POWER, ), self.Factor)
-
-    def Factor (self):
-        res = ParseResult()
-        tok = self.currToken
-        if tok._type in (TT_PLUS, TT_MINUS):
-            res.RegisterAdvance()
-            self.Advance()
-            factor = res.Register(self.Factor())
-            if res.error: return res
-            return res.Success(UnaryOpNode(tok, factor))
-        elif tok._type == TT_FACTORIAL:
-            res.RegisterAdvance()
-            self.Advance()
-            factor = res.Register(self.Factor())
-            if res.error: return res
-            return res.Success(UnaryOpNode(tok, factor))
-
-        return self.Power()
-
-    def Term (self):
-        return self.BinOp(self.Factor, (TT_MUL, TT_DIV, TT_MOD))
-
-    def ArithExpr(self):
-        return self.BinOp(self.Term, (TT_PLUS, TT_MINUS))
-
-    def CompExpr (self):
-        res = ParseResult()
-        if self.currToken.Matches(TT_KEYWORD, 'NOT') or self.currToken.Matches(TT_KEYWORD, '~'):
-            opTok = self.currToken
-            res.RegisterAdvance()
-            self.Advance()
-
-            node = res.Register(self.CompExpr())
-            if res.error: return res
-            return res.Success(UnaryOpNode(opTok, node))
-
-        node = res.Register(self.BinOp(self.ArithExpr, (TT_EE, TT_NE, TT_GT, TT_GTE, TT_LT, TT_LTE)))
-        if res.error:
-            return res.Failure(InvalidSyntaxError(
-                self.currToken.posStart, self.currToken.posEnd,
-                "Expected an Int | Float | Identifier | '+' | '-' | '(' | 'NOT'"
-            ))
-
-        return res.Success(node)
-
-    def Expr (self):
-        res = ParseResult()
-        if self.currToken.Matches(TT_KEYWORD, 'let'):
-            res.RegisterAdvance()
-            self.Advance()
-
-            if self.currToken._type != TT_IDENTIFIER:
-                return res.Failure(InvalidSyntaxError(
-                    self.currToken.posStart, self.currToken.posEnd,
-                    "Expected an Identifier"
-                ))
-            varName = self.currToken
-            res.RegisterAdvance()
-            self.Advance()
-
-            if self.currToken._type != TT_EQ:
-                return res.Failure(InvalidSyntaxError(
-                    self.currToken.posStart, self.currToken.posEnd,
-                    "Expected '='"
-                ))
-
-            res.RegisterAdvance()
-            self.Advance()
-            expr = res.Register(self.Expr())
-            if res.error: return res
-            return res.Success(VarAssignNode(varName, expr))
-
-        node = res.Register(self.BinOp(self.CompExpr, ((TT_KEYWORD, 'AND'), (TT_KEYWORD, 'OR'))))
-        # node = res.Register(self.BinOp(self.CompExpr,
-        #     ((TT_KEYWORD, "AND"), (TT_KEYWORD, "&"),
-        #     (TT_KEYWORD, "OR"),  (TT_KEYWORD, "|"))))
-        if res.error:
-            return res.Failure(InvalidSyntaxError(
-                self.currToken.posStart, self.currToken.posEnd,
-                "Expected an Int | Float | 'let' | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function'"
-            ))
-
-        return res.Success(node)
+        return res.Success(WhileNode(condition, body, False))
 
     def BinOp (self, funcA, operations, funcB = None):
         if funcB == None: funcB = funcA
@@ -1443,10 +1624,11 @@ class BaseFunction(Value):
         return res.Success(None)
 
 class Function(BaseFunction):
-    def __init__ (self, name, bodyNode, argNames):
+    def __init__ (self, name, bodyNode, argNames, shouldReturnNull):
         super().__init__(name)
-        self.bodyNode = bodyNode
-        self.argNames = argNames
+        self.bodyNode         = bodyNode
+        self.argNames         = argNames
+        self.shouldReturnNull = shouldReturnNull
 
     def Execute(self, args):
         res         = RTResult()
@@ -1459,10 +1641,10 @@ class Function(BaseFunction):
         value = res.Register(interpreter.Visit(self.bodyNode, exeContext))
         if res.error: return res
 
-        return res.Success(value)
+        return res.Success(Number.null if shouldReturnNull else value)
 
     def Copy (self):
-        copy = Function(self.name, self.bodyNode, self.argNames)
+        copy = Function(self.name, self.bodyNode, self.argNames, self.shouldReturnNull)
         copy.SetContext(self.context)
         copy.SetPosition(self.posStart, self.posEnd)
         return copy
@@ -1781,21 +1963,22 @@ class Interpreter:
     def Visit_IfNode (self, node, context):
         res = RTResult()
 
-        for condition, expr in node.cases:
+        for condition, expr, shouldReturnNull in node.cases:
             conditionValue = res.Register(self.Visit(condition, context))
             if res.error: return res
 
             if conditionValue.IsTrue():
                 exprValue = res.Register(self.Visit(expr, context))
                 if res.error: return res
-                return res.Success(exprValue)
+                return res.Success(Number.null if shouldReturnNull else exprValue)
 
         if node.elseCase:
-            elseValue = res.Register(self.Visit(node.elseCase, context))
+            expr, shouldReturnNull = node.elseCase
+            elseValue = res.Register(self.Visit(expr, context))
             if res.error: return res
-            return res.Success(elseValue)
+            return res.Success(Number.null if shouldReturnNull else elseValue)
 
-        return res.Success(None)
+        return res.Success(Number.null)
 
     def Visit_ForNode (self, node, context):
         res        = RTResult()
@@ -1828,6 +2011,7 @@ class Interpreter:
             if res.error: return res
 
         return res.Success(
+            Number.null if shouldReturnNull else
             List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
@@ -1844,11 +2028,12 @@ class Interpreter:
             if res.error: return res
 
         return res.Success(
+            Number.null if shouldReturnNull else
             List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
     def Visit_ListNode (self, node, context):
-        res     = RTResult()
+        res      = RTResult()
         elements = []
 
         for elementNode in node.elementNodes:
@@ -1858,12 +2043,12 @@ class Interpreter:
         return res.Success(List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd))
 
     def Visit_FuncDefNode (self, node, context):
-        res = RTResult()
+        res       = RTResult()
 
-        funcName = node.funcNameTok.value
-        bodyNode = node.bodyNode
-        argNames = [argName.value for argName in node.argNameToks]
-        funcValue = Function(funcName, bodyNode, argNames)
+        funcName  = node.funcNameTok.value
+        bodyNode  = node.bodyNode
+        argNames  = [argName.value for argName in node.argNameToks]
+        funcValue = Function(funcName, bodyNode, argNames, node.shouldReturnNull)
         funcValue.SetContext(context)
         funcValue.SetPosition(node.posStart, node.posEnd)
 
@@ -1897,6 +2082,7 @@ class Interpreter:
 ################################################################################
 
 DEBUG             = 0
+
 globalSymbolTable = SymbolTable()
 globalSymbolTable.set("Null",        Number.null                  )
 globalSymbolTable.set("True",        Number.true                  )
@@ -1918,12 +2104,7 @@ globalSymbolTable.set("gcd",         BuiltInFunction.GCD          )
 globalSymbolTable.set("sqrt",        BuiltInFunction.Sqrt         )
 globalSymbolTable.set("rand",        BuiltInFunction.Rand         )
 
-def Run (fname, text, debug = None):
-    # if debug:
-    #     DEBUG = 1
-    # else:
-    #     DEBUG = 0
-
+def Run (fname, text):
     # Generate Tokens
     lexar         = Lexar(fname, text)
     tokens, error = lexar.MakeTokens()
