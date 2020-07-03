@@ -131,6 +131,8 @@ TT_EQ			= 'EQ'
 
 TT_LPAREN   	= 'LPAREN'
 TT_RPAREN   	= 'RPAREN'
+TT_LSQUARE      = 'LSQAURE'
+TT_RSQUARE      = 'RSQAURE'
 
 TT_EE           = 'EE'
 TT_NE           = 'NE'
@@ -250,6 +252,12 @@ class Lexar:
                 self.Advance()
             elif self.currChar == ')':
                 tokens.append(Token(TT_RPAREN,    posStart = self.currPos))
+                self.Advance()
+            elif self.currChar == '[':
+                tokens.append(Token(TT_LSQUARE,   posStart = self.currPos))
+                self.Advance()
+            elif self.currChar == ']':
+                tokens.append(Token(TT_RSQUARE,   posStart = self.currPos))
                 self.Advance()
             elif self.currChar == ',':
                 tokens.append(Token(TT_COMMA,     posStart = self.currPos))
@@ -396,6 +404,12 @@ class NumberNode:
     def __repr__ (self):
         return f'{self.tok}'
 
+class ListNode:
+    def __init__ (self, elementNodes, posStart, posEnd):
+        self.elementNodes = elementNodes
+        self.posStart     = posStart
+        self.posEnd       = posEnd
+
 class StringNode:
     def __init__ (self, tok):
         self.tok       = tok
@@ -496,46 +510,49 @@ class FuncCallNode:
 #                                   Parser                                     #
 ################################################################################
 
-# Grammar - - - - - - - - - - - - - - - - - - - - - -
-# Expression : KEYWORD:LET IDENTIFIER EQ expr       -
-#            : comp-expr (AND|OR) comp-expr         -
-#                                                   -
-# Comp-expr  : NOT comp-expr                        -
-#            : arith-expr (EE|NE) arith-expr        -
-#                                                   -
-# Arith-expr : term ((PLUS | MINUS) Term)*          -
-#                                                   -
-# Term       : factor ((MUL|DIV|MOD) factor)*       -
-#                                                   -
-# Factor     : (PLUS | MINUS) Factor                -
-#            : FACTORIAL Factor                     -
-#            : power                                -
-#                                                   -
-# Power      : call (POWER factor)*                 -
-#            : factorial                            -
-#                                                   -
-# call       : atom (LPARN (expr(COMMA expr)*)?RPAREN)?
-#                                                   -
-# Atom       : INT | FLOAT | STRING | IDENTIFIER    -
-#            : LPAREN expr RPAREN                   -
-#            : If-expr                              -
-#            : For-expr                             -
-#            : While-expr                           -
-#            : function-defn                        -
-#                                                   -
-# If-expr    : KW: IF expr KW: THEN expr            -
-#            : (KW:ELIF expr KW: THEN expr)*        -
-#            : (KW:ELSE expr KW: THEN expr)?        -
-#                                                   -
-# for-expr   : KW:FOR IDENTIFIER EQ expr KW:TO expr -
-# 			 : (KW:STEP expr)? KW:THEN expr         -
-#                                                   -
-# while-expr : KW:WHILE expr KW:THEN expr           -
-#                                                   -
-# func-def   : KW:function IDENTIFIER               -
-#                LPAREN (ID (COMMA ID)*)? RPAREN    -
-#                COLON expr                         -
-# - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Grammar - - - - - - - - - - - - - - - - - - - - - - - -
+# Expression : KEYWORD:LET IDENTIFIER EQ expr           -
+#            : comp-expr (AND|OR) comp-expr             -
+#                                                       -
+# Comp-expr  : NOT comp-expr                            -
+#            : arith-expr (EE|NE) arith-expr            -
+#                                                       -
+# Arith-expr : term ((PLUS | MINUS) Term)*              -
+#                                                       -
+# Term       : factor ((MUL|DIV|MOD) factor)*           -
+#                                                       -
+# Factor     : (PLUS | MINUS) Factor                    -
+#            : FACTORIAL Factor                         -
+#            : power                                    -
+#                                                       -
+# Power      : call (POWER factor)*                     -
+#            : factorial                                -
+#                                                       -
+# call       : atom (LPARN (expr(COMMA expr)*)?RPAREN)? -
+#                                                       -
+# Atom       : INT | FLOAT | STRING | IDENTIFIER        -
+#            : LPAREN expr RPAREN                       -
+#            : list-expr                                -
+#            : If-expr                                  -
+#            : For-expr                                 -
+#            : While-expr                               -
+#            : function-defn                            -
+#                                                       -
+# list-expr  : LSQUARE (expr (COMMA expr)*)? RSQAURE    -
+#                                                       -
+# If-expr    : KW: IF expr KW: THEN expr                -
+#            : (KW:ELIF expr KW: THEN expr)*            -
+#            : (KW:ELSE expr KW: THEN expr)?            -
+#                                                       -
+# for-expr   : KW:FOR IDENTIFIER EQ expr KW:TO expr     -
+# 			 : (KW:STEP expr)? KW:THEN expr             -
+#                                                       -
+# while-expr : KW:WHILE expr KW:THEN expr               -
+#                                                       -
+# func-def   : KW:function IDENTIFIER                   -
+#                LPAREN (ID (COMMA ID)*)? RPAREN        -
+#                COLON expr                             -
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 class ParseResult:
     def __init__ (self):
@@ -667,6 +684,53 @@ class Parser:
         if res.error: return res
 
         return res.Success(FuncDefNode(funcName, inputVar, body))
+
+    def ListExpr (self):
+        res          = ParseResult()
+        elementNodes = []
+        posStart     = self.currToken.posStart.Copy()
+
+        if not self.currToken._type == TT_LSQUARE:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected '['"
+            ))
+
+        res.RegisterAdvance()
+        self.Advance()
+
+        if self.currToken._type == TT_RSQUARE:
+            res.RegisterAdvance()
+            self.Advance()
+        else:
+            elementNodes.append(res.Register(self.Expr()))
+            if res.error:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected ']' | 'let' | 'if' | 'for' | 'while' | 'def' | INT | FLOAT | IDENTIFIER | '+' | '-' | '(' | '[' | or 'not'"
+                ))
+
+            while self.currToken._type == TT_COMMA:
+                res.RegisterAdvance()
+                self.Advance()
+
+                elementNodes.append(res.Register(self.Expr()))
+                if res.error: return res
+
+            if not self.currToken._type == TT_RSQUARE:
+                return res.Failure(InvalidSyntaxError(
+                    self.currToken.posStart, self.currToken.posEnd,
+                    "Expected ']'"
+                ))
+
+            res.RegisterAdvance()
+            self.Advance()
+
+        return res.Success(ListNode(
+            elementNodes,
+            posStart,
+            self.currToken.posEnd.Copy()
+        ))
 
     def IfExpr (self):
         res      = ParseResult()
@@ -868,33 +932,34 @@ class Parser:
                     "Expected ')'"
                 ))
 
+        elif tok._type == TT_LSQUARE:
+            listExpr = res.Register(self.ListExpr())
+            if res.error: return res
+            return res.Success(listExpr)
+
         elif tok.Matches(TT_KEYWORD, "if"):
             ifExpr = res.Register(self.IfExpr())
             if res.error: return res
-
             return res.Success(ifExpr)
 
         elif tok.Matches(TT_KEYWORD, "for"):
             forExpr = res.Register(self.ForExpr())
             if res.error: return res
-
             return res.Success(forExpr)
 
         elif tok.Matches(TT_KEYWORD, "while"):
             WhileExpr = res.Register(self.WhileExpr())
             if res.error: return res
-
             return res.Success(WhileExpr)
 
         elif tok.Matches(TT_KEYWORD, "function"):
             funcDef = res.Register(self.FuncDef())
             if res.error: return res
-
             return res.Success(funcDef)
 
         return res.Failure(InvalidSyntaxError(
             tok.posStart, tok.posEnd,
-            "Expected an Int | Float | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function'"
+            "Expected an Int | Float | Identifier | '+' | '-' | '(' | '[' | 'if' | 'for' | 'while' | 'function'"
         ))
 
     def Call (self):
@@ -1244,6 +1309,67 @@ Number.false = Number(   0   )
 Number.true  = Number(   1   )
 Number.pi    = Number(math.pi)
 
+class List(Value):
+    def __init__ (self, elements):
+        super().__init__()
+        self.elements = elements
+
+    def AddedTo (self, B):
+        newList = self.Copy()
+        newList.elements.append(B)
+        return newList, None
+
+    def SubtractedBy (self, B):
+        if isinstance(B, Number):
+            newList = self.Copy()
+            try:
+                newList.elements.pop(B.value)
+                return newList, None
+            except:
+                return None, RunTimeError(
+                    B.posStart, B.posEnd,
+                    'Element at this index could not be removed. Index out of bounds.',
+                    self.context
+                )
+        else:
+            return None, Value.IllegalOperation(self, B)
+
+    def MultipliedBy (self, B):
+        if isinstance(B, List):
+            newList = self.Copy()
+            newList.elements.extend(B.elements)
+            return newList, None
+        else:
+            return None, Value.illegal_operation(self, B)
+
+    def DividedBy (self, B):
+        if isinstance(B, Number):
+            try:
+                return self.elements[B.value], None
+            except:
+                return None, RunTimeError(
+                    B.pos_start, B.pos_end,
+                    'Element at this index could not be retrieved. Index out of bounds.',
+                    self.context
+                )
+            else:
+                return None, Value.illegal_operation(self, B)
+
+    def Copy(self):
+        copy = List(self.elements)
+        copy.SetPosition(self.posStart, self.posEnd)
+        copy.SetContext(self.context)
+        return copy
+
+    def len(self):
+        return len(self.elements)
+
+    def __str__(self):
+        return ", ".join([str(x) for x in self.elements])
+
+    def __repr__(self):
+        return f'[{", ".join([repr(x) for x in self.elements])}]'
+
 class String(Value):
     def __init__ (self, value):
         super().__init__()
@@ -1278,8 +1404,8 @@ class String(Value):
 
 class BaseFunction(Value):
     def __init__ (self, name):
-        self.name = name
         super().__init__()
+        self.name = name
 
     def GenerateNewContext (self):
         newContext = Context(self.name, self.context, self.posStart)
@@ -1288,10 +1414,16 @@ class BaseFunction(Value):
 
     def CheckArgs (self, argNames, args):
         res = RTResult()
-        if len(args) != len(argNames):
+        if len(args) != len(argNames) and self.name != "Pop":
             return res.Failure(RunTimeError(
                 self.posStart, self.posEnd,
-                f"Expected {len(argNames)} but recieved {len(args)}",
+                f"Expected {len(argNames)} input args but recieved {len(args)} args",
+                self.context
+            ))
+        elif self.name == "Pop" and len(args) != 1:
+            return res.Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                f"Expected 1 or {len(argNames)} input args but recieved {len(args)} args",
                 self.context
             ))
         return res.Success(None)
@@ -1407,78 +1539,69 @@ class BuiltInFunction(BaseFunction):
         return RTResult().Success(Number.true if isFunc else Number.false)
     Execute_IsFunc.argNames = ['value']
 
-    # def Execute_IsList (self, exeContext):
-    #     isList = isinstance(exeContext.symbolTable.get("value"), List)
-    #     return RTResult().Success(Number.true if isList else Number.false)
-    # Exec_IsList.argNames = ['value']
+    def Execute_IsList (self, exeContext):
+        isList = isinstance(exeContext.symbolTable.get("value"), List)
+        return RTResult().Success(Number.true if isList else Number.false)
+    Execute_IsList.argNames = ['value']
 
-    # def Execute_Append (self, exeContext):
-    #     _list = exec_ctx.symbolTable.get("list")
-    #     value = exec_ctx.symbolTable.get("value")
-    #
-    #     if not isinstance(_list, List):
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "First Argument must be a list",
-    #             exeContext
-    #         ))
-    #
-    #     _list.elements.append(value)
-    #     return RTResult().Sucess(Number.null)
-    # Execute_Append.argNames = ['list','value']
+    def Execute_Append (self, exeContext):
+        _list = exeContext.symbolTable.get("list")
+        value = exeContext.symbolTable.get("value")
 
-    # def Execute_Pop (self, exeContext):
-    #     _list = exec_ctx.symbolTable.get("list")
-    #     index = exec_ctx.symbolTable.get("index")
-    #
-    #     if not isinstance(_list, List):
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "the First Argument must be a list",
-    #             exeContext
-    #         ))
-    #
-    #     if not isinstance(index, Number):
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "the Second Argument must be a number",
-    #             exeContext
-    #         ))
-    #
-    #     try:
-    #         element = _list.elements.pop(index.value)
-    #     except:
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "Element could not be removed. The index is out of scope",
-    #             exeContext
-    #         ))
-    #
-    #     return RTResult().Sucess(element)
-    # Execute_Pop.argNames = ['list','index']
+        if not isinstance(_list, List):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "First Argument must be a list",
+                exeContext
+            ))
 
-    # def Execute_Pop (self, exeContext):
-    #     _list = exec_ctx.symbolTable.get("listA")
-    #     index = exec_ctx.symbolTable.get("listB")
-    #
-    #     if not isinstance(listA, List):
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "the First Argument must be a list",
-    #             exeContext
-    #         ))
-    #
-    #     if not isinstance(listB, List):
-    #         return RTResult().Failure(RunTimeError(
-    #             self.posStart, self.posEnd,
-    #             "the Second Argument must be a list",
-    #             exeContext
-    #         ))
-    #
-    #     listA.elements.extend(listB.elements)
-    #
-    #     return RTResult().Sucess(Number.null)
-    # Execute_Pop.argNames = ['listA','listB']
+        _list.elements.append(value)
+        return RTResult().Success(_list)
+    Execute_Append.argNames = ['list','value']
+
+    def Execute_Pop (self, exeContext):
+        _list = exeContext.symbolTable.get("list")
+        index = exeContext.symbolTable.get("index")
+
+        if index == None: index = Number(_list.len() - 1)
+
+        if not isinstance(_list, List):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "the First Argument must be a list",
+                exeContext
+            ))
+
+        if not isinstance(index, Number):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "the Second Argument must be a number",
+                exeContext
+            ))
+
+        try:
+            element = _list.elements.pop(index.value)
+        except:
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "Element could not be removed. The index is out of scope",
+                exeContext
+            ))
+
+        return RTResult().Success(element)
+    Execute_Pop.argNames = ['list','index']
+
+    def Execute_GCD(self, exeContext):
+        pass
+    Execute_GCD.argNames = ['valueA','valueB']
+
+    def Execute_Sqrt(self, exeContext):
+        pass
+    Execute_Sqrt.argNames = ['value']
+
+    def Execute_Rand(self, exeContext):
+        pass
+    Execute_Rand.argNames = []
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
 
@@ -1499,10 +1622,13 @@ BuiltInFunction.Clear       = BuiltInFunction("Clear")
 BuiltInFunction.IsNum       = BuiltInFunction("IsNum")
 BuiltInFunction.IsStr       = BuiltInFunction("IsStr")
 BuiltInFunction.IsFunc      = BuiltInFunction("IsFunc")
-# BuiltInFunction.IsList      = BuiltInFunction("IsList")
-# BuiltInFunction.Append      = BuiltInFunction("Append")
-# BuiltInFunction.Pop         = BuiltInFunction("Pop")
-# BuiltInFunction.Extend      = BuiltInFunction("Extend")
+BuiltInFunction.IsList      = BuiltInFunction("IsList")
+BuiltInFunction.Append      = BuiltInFunction("Append")
+BuiltInFunction.Pop         = BuiltInFunction("Pop")
+BuiltInFunction.Extend      = BuiltInFunction("Extend")
+BuiltInFunction.GCD         = BuiltInFunction("GCD")
+BuiltInFunction.Sqrt        = BuiltInFunction("Sqrt")
+BuiltInFunction.Rand        = BuiltInFunction("Rand")
 
 ################################################################################
 #                                   CONTEXT                                    #
@@ -1672,7 +1798,9 @@ class Interpreter:
         return res.Success(None)
 
     def Visit_ForNode (self, node, context):
-        res = RTResult()
+        res        = RTResult()
+        elements   = []
+
         startValue = res.Register(self.Visit(node.startNode, context))
         if res.error: return res
 
@@ -1695,23 +1823,39 @@ class Interpreter:
         while condition():
             context.symbolTable.set(node.iteratorName.value, Number(i))
             i += stepValue.value
-            res.Register(self.Visit(node.bodyNode, context))
+
+            elements.append(res.Register(self.Visit(node.bodyNode, context)))
             if res.error: return res
 
-        return res.Success(None)
+        return res.Success(
+            List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
+        )
 
     def Visit_WhileNode (self, node, context):
-        res = RTResult()
+        res      = RTResult()
+        elements = []
         while True:
             conditionValue = res.Register(self.Visit(node.conditionNode, context))
             if res.error: return res
 
             if not conditionValue.IsTrue(): break
 
-            res.Register(self.Visit(node.bodyNode, context))
+            elements.append(res.Register(self.Visit(node.bodyNode, context)))
             if res.error: return res
 
-        return res.Success(None)
+        return res.Success(
+            List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
+        )
+
+    def Visit_ListNode (self, node, context):
+        res     = RTResult()
+        elements = []
+
+        for elementNode in node.elementNodes:
+            elements.append(res.Register(self.Visit(elementNode, context)))
+            if res.error: return res
+
+        return res.Success(List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd))
 
     def Visit_FuncDefNode (self, node, context):
         res = RTResult()
@@ -1766,10 +1910,13 @@ globalSymbolTable.set("clear",       BuiltInFunction.Clear        )
 globalSymbolTable.set("isNum",       BuiltInFunction.IsNum        )
 globalSymbolTable.set("isStr",       BuiltInFunction.IsStr        )
 globalSymbolTable.set("isFunc",      BuiltInFunction.IsFunc       )
-# globalSymbolTable.set("isList",      BuiltInFunction.IsList       )
-# globalSymbolTable.set("append",      BuiltInFunction.Append       )
-# globalSymbolTable.set("pop",         BuiltInFunction."Pop         )
-# globalSymbolTable.set("extend",      BuiltInFunction.Extend       )
+globalSymbolTable.set("isList",      BuiltInFunction.IsList       )
+globalSymbolTable.set("append",      BuiltInFunction.Append       )
+globalSymbolTable.set("pop",         BuiltInFunction.Pop          )
+globalSymbolTable.set("extend",      BuiltInFunction.Extend       )
+globalSymbolTable.set("gcd",         BuiltInFunction.GCD          )
+globalSymbolTable.set("sqrt",        BuiltInFunction.Sqrt         )
+globalSymbolTable.set("rand",        BuiltInFunction.Rand         )
 
 def Run (fname, text, debug = None):
     # if debug:
