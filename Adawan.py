@@ -211,7 +211,9 @@ class Lexar:
         while self.currChar != None:
             if self.currChar in ' \t':
                 self.Advance()
-            if self.currChar in '\n;':
+            elif self.currChar == '#':
+                self.SkipComment()
+            elif self.currChar in '\n;':
                 tokens.append(Token(TT_NEWLINE,   posStart = self.currPos))
                 self.Advance()
             elif self.currChar in DIGITS:
@@ -355,6 +357,24 @@ class Lexar:
         self.Advance()
 
         return Token(TT_STRING, str, posStart, self.currPos)
+
+    def SkipComment (self):
+        self.Advance()
+        if self.currChar == '#':
+            # Multi-line Comment with "##"
+            foundOne = False
+            while True:
+                self.Advance()
+                if self.currChar == "#":
+                    if foundOne:
+                        foundOne == true
+                    else: break
+        else:
+            # Single-Line Comment with "#"
+            while self.currChar != '\n':
+                self.Advance()
+
+        self.Advance()
 
     def MakeNotEquals (self):
         posStart = self.currPos.Copy()
@@ -1868,6 +1888,19 @@ class BuiltInFunction(BaseFunction):
         return RTResult().Success(element)
     Execute_Pop.argNames = ['list','index']
 
+    def Execute_Len (self, exeContext):
+        _list = exeContext.symbolTable.get("list")
+
+        if not isinstance(_list, List):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "Argument must be a list",
+                exeContext
+            ))
+
+        return RTResult().Success(Number(len(list.elements)))
+    Execute_Len.argNames = ['list']
+
     def Execute_GCD (self, exeContext):
         pass
     Execute_GCD.argNames = ['valueA','valueB']
@@ -1879,6 +1912,39 @@ class BuiltInFunction(BaseFunction):
     def Execute_Rand (self, exeContext):
         pass
     Execute_Rand.argNames = []
+
+    def Execute_Run (self, exeContext):
+        fname = exeContext.symbolTable.get("fname")
+        if not isinstance(fname, String):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "Arguement must be a string",
+                exeContext
+            ))
+
+        fname = fname.value
+
+        try:
+            with open(fname, "r") as f:
+                script = f.read()
+
+        except Exception as e:
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                f"Failed to load Script \"{fname}\"\n" + str(e),
+                exeContext
+            ))
+
+        _, error = Run(fname, script)
+        if error:
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                f"Failed to execute Script \"{fname}\"\n" + error.AsString(),
+                exeContext
+            ))
+
+        return RTResult().Success(Number.null)
+    Execute_Run.argNames = ["fname"]
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
 
@@ -1902,10 +1968,12 @@ BuiltInFunction.IsFunc      = BuiltInFunction("IsFunc")
 BuiltInFunction.IsList      = BuiltInFunction("IsList")
 BuiltInFunction.Append      = BuiltInFunction("Append")
 BuiltInFunction.Pop         = BuiltInFunction("Pop")
+BuiltInFunction.Len         = BuiltInFunction("Len")
 BuiltInFunction.Extend      = BuiltInFunction("Extend")
 BuiltInFunction.GCD         = BuiltInFunction("GCD")
 BuiltInFunction.Sqrt        = BuiltInFunction("Sqrt")
 BuiltInFunction.Rand        = BuiltInFunction("Rand")
+BuiltInFunction.Run         = BuiltInFunction("Run")
 
 ################################################################################
 #                                   CONTEXT                                    #
@@ -2221,10 +2289,12 @@ globalSymbolTable.set("isFunc",      BuiltInFunction.IsFunc       )
 globalSymbolTable.set("isList",      BuiltInFunction.IsList       )
 globalSymbolTable.set("append",      BuiltInFunction.Append       )
 globalSymbolTable.set("pop",         BuiltInFunction.Pop          )
+globalSymbolTable.set("len",         BuiltInFunction.Len          )
 globalSymbolTable.set("extend",      BuiltInFunction.Extend       )
 globalSymbolTable.set("gcd",         BuiltInFunction.GCD          )
 globalSymbolTable.set("sqrt",        BuiltInFunction.Sqrt         )
 globalSymbolTable.set("rand",        BuiltInFunction.Rand         )
+globalSymbolTable.set("run",         BuiltInFunction.Run          )
 
 def Run (fname, text):
     # Generate Tokens
