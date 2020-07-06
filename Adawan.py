@@ -158,7 +158,10 @@ KEYWORDS = [
     'for',
     'while',
     'function',
-    'end'
+    'end',
+    'return',
+    'continue',
+    'break'
 ]
 
 class Token:
@@ -489,11 +492,11 @@ class VarAccessNode:
         self.posEnd     = self.varNameTok.posEnd
 
 class FuncDefNode:
-    def __init__(self, funcNameTok, argNameToks, bodyNode, shouldReturnNull):
+    def __init__(self, funcNameTok, argNameToks, bodyNode, shouldAutoReturn):
         self.funcNameTok      = funcNameTok
         self.argNameToks      = argNameToks
         self.bodyNode         = bodyNode
-        self.shouldReturnNull = shouldReturnNull
+        self.shouldAutoReturn = shouldAutoReturn
 
         if len(argNameToks) > 0:
             self.posStart = argNameToks[0].posStart
@@ -514,12 +517,34 @@ class FuncCallNode:
         else:
             self.posEnd = nodeToCall.posEnd
 
+class ReturnNode:
+    def __init__ (self, nodeToReturn, posStart, posEnd):
+        self.nodeToReturn = nodeToReturn
+        self.posStart     = posStart
+        self.posEnd       = posEnd
+
+class ContinueNode:
+    def __init__ (self, posStart, posEnd):
+        self.posStart     = posStart
+        self.posEnd       = posEnd
+
+class BreakNode:
+    def __init__ (self, posStart, posEnd):
+        self.posStart     = posStart
+        self.posEnd       = posEnd
+
 ################################################################################
 #                                   Parser                                     #
 ################################################################################
 
 # Grammar - - - - - - - - - - - - - - - - - - - - - - - -
-# Statement  : NEWLINE* expr (NEWLINE+ expr)* NEWLINE*
+# Statements : NEWLINE* statement (NEWLINE+ statement)* NEWLINE*
+#                                                       -
+# Statement  : KW: RETURN expr?                         -
+#            : KW: CONTINUE                             -
+#            : KW: BREAK                                -
+#            : expr                                     -
+#                                                       -
 # Expression : KEYWORD:LET IDENTIFIER EQ expr           -
 #            : comp-expr (AND|OR) comp-expr             -
 #                                                       -
@@ -550,24 +575,24 @@ class FuncCallNode:
 # list-expr  : LSQUARE (expr (COMMA expr)*)? RSQAURE    -
 #                                                       -
 # If-expr    : KW: IF expr KW: THEN                     -
-#              (expr if-expr-b | if-expr-c?)            -
+#              (Statement if-expr-b | if-expr-c?)       -
 #            | (NEWLINE Statements KW: END if-expr-b | if-expr-c)
 #                                                       -
 # If-expr-b  : KW: ELIF expr KW: THEN                   -
-#              (expr if-expr-elif | if-expr-else?)      -
+#              (Statement if-expr-elif | if-expr-else?) -
 #            | (NEWLINE Statements KW: END if-expr-elif | if-expr-else)
 #                                                       -
 # If-expr-b  : KW: ELSE                                 -
-#              expr                                     -
+#              Statement                                -
 #            | (NEWLINE Statements KW:END)              -
 #                                                       -
 # for-expr   : KW:FOR IDENTIFIER EQ expr KW:TO expr     -
 # 			   (KW:STEP expr)? KW:THEN                  -
-#              expr                                     -
+#              Statement                                -
 #            | (NEWLINE Statements KW:END)              -
 #                                                       -
 # while-expr : KW:WHILE expr KW:THEN                    -
-#              expr                                     -
+#              Statement                                -
 #            | (NEWLINE Statements KW:END)              -
 #                                                       -
 # func-def   : KW:function IDENTIFIER                   -
@@ -649,7 +674,7 @@ class Parser:
             res.RegisterAdvance()
             self.Advance()
 
-        statement = res.Register(self.Expr())
+        statement = res.Register(self.Statement())
         if res.error: return res
         statements.append(statement)
 
@@ -666,9 +691,9 @@ class Parser:
 
             if not moreStatements: break
 
-            statement = res.TryRegister(self.Expr())
+            statement = res.TryRegister(self.Statement())
             if not statement:
-                self.reverse(res.toReverseCount)
+                self.Reverse(res.toReverseCount)
                 moreStatements = False
                 continue
             statements.append(statement)
@@ -678,6 +703,38 @@ class Parser:
             posStart,
             self.currToken.posEnd.Copy()
         ))
+
+    def Statement (self):
+        res        = ParseResult()
+        posStart   = self.currToken.posStart.Copy()
+
+        if self.currToken.Matches(TT_KEYWORD, "return"):
+            res.RegisterAdvance()
+            self.Advance()
+
+            expr = res.TryRegister(self.Expr())
+            if not expr: self.Reverse(res.toReverseCount)
+
+            return res.Success(ReturnNode(expr, posStart, self.currToken.posStart.Copy()))
+
+        if self.currToken.Matches(TT_KEYWORD, "continue"):
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(ContinueNode(posStart, self.currToken.posStart.Copy()))
+
+        if self.currToken.Matches(TT_KEYWORD, "break"):
+            res.RegisterAdvance()
+            self.Advance()
+            return res.Success(BreakNode(posStart, self.currToken.posStart.Copy()))
+
+        expr = res.Register(self.Expr())
+        if res.error:
+            return res.Failure(InvalidSyntaxError(
+                self.currToken.posStart, self.currToken.posEnd,
+                "Expected an Int | Float | 'let' | Identifier | '+' | '-' | '(' | 'if' | 'for' | 'while' | 'function' | 'return' | 'break' | 'continue'"
+            ))
+
+        return res.Success(expr)
 
     def Expr (self):
         res = ParseResult()
@@ -702,11 +759,13 @@ class Parser:
 
             res.RegisterAdvance()
             self.Advance()
+
             expr = res.Register(self.Expr())
             if res.error: return res
             return res.Success(VarAssignNode(varName, expr))
 
         node = res.Register(self.BinOp(self.CompExpr, ((TT_KEYWORD, 'AND'), (TT_KEYWORD, 'OR'))))
+
         # node = res.Register(self.BinOp(self.CompExpr,
         #     ((TT_KEYWORD, "AND"), (TT_KEYWORD, "&"),
         #     (TT_KEYWORD, "OR"),  (TT_KEYWORD, "|"))))
@@ -952,7 +1011,7 @@ class Parser:
             body = res.Register(self.Statements())
             if res.error: return res
 
-            if not self.currToken.matches(TT_KEYWORD, 'end'):
+            if not self.currToken.Matches(TT_KEYWORD, 'end'):
                 return res.Failure(InvalidSyntaxError(
                     self.currToken.posStart, self.currToken.posEnd,
                     "Expected 'end'"
@@ -1056,7 +1115,7 @@ class Parser:
             if res.error: return res
             cases.append((condition, statements, True))
 
-            if self.currToken.Matches(TT_KEYWORD, 'END'):
+            if self.currToken.Matches(TT_KEYWORD, 'end'):
                 res.RegisterAdvance()
                 self.Advance()
             else:
@@ -1065,13 +1124,14 @@ class Parser:
                 newCases, elseCase = allCases
                 cases.extend(newCases)
         else:
-            expr = res.Register(self.Expr())
+            expr = res.Register(self.Statement())
             if res.error: return res
             cases.append((condition, expr, False))
 
             allCases = res.Register(self.IfExprBC())
             if res.error: return res
             newCases, elseCase = allCases
+
             cases.extend(newCases)
 
         return res.Success((cases, elseCase))
@@ -1104,7 +1164,7 @@ class Parser:
                         "Expected 'end'"
                     ))
             else:
-                expr     = res.Register(self.Expr())
+                expr     = res.Register(self.Statement())
                 if res.error: return res
                 elseCase = (expr, False)
 
@@ -1118,7 +1178,7 @@ class Parser:
         if self.currToken.Matches(TT_KEYWORD, 'elif'):
             allCases = res.Register(self.IfExprB())
             if res.error: return res
-            allCases, elseCase = allCases
+            cases, elseCase = allCases
         else:
             elseCase = res.Register(self.IfExprC())
             if res.error: return res
@@ -1206,18 +1266,18 @@ class Parser:
             body = res.Register(self.Statements())
             if res.error: return res
 
-            if not self.currToken.matches(TT_KEYWORD, 'end'):
+            if not self.currToken.Matches(TT_KEYWORD, 'end'):
                 return res.Failure(InvalidSyntaxError(
                     self.current_tok.posStart, self.current_tok.posEnd,
                     f"Expected 'end'"
                 ))
 
-            res.register_advancement()
-            self.advance()
+            res.RegisterAdvance()
+            self.Advance()
 
-            return res.success(ForNode(varName, startValue, endValue, body, stepValue, True))
+            return res.Success(ForNode(varName, startValue, endValue, body, stepValue, True))
 
-        body = res.Register(self.Expr())
+        body = res.Register(self.Statement())
         if res.error: return res
 
         return res.Success(ForNode(varName, startValue, endValue, body, stepValue, False))
@@ -1252,7 +1312,7 @@ class Parser:
             body = res.Register(self.Statements())
             if res.error: return res
 
-            if not self.currToken.matches(TT_KEYWORD, 'end'):
+            if not self.currToken.Matches(TT_KEYWORD, 'end'):
                 return res.Failure(InvalidSyntaxError(
                     self.currToken.posStart, self.currToken.posEnd,
                     "Expected 'end'"
@@ -1260,10 +1320,9 @@ class Parser:
 
             res.RegisterAdvance()
             self.Advance()
-
             return res.Success(WhileNode(condition, body, True))
 
-        body = res.Register(self.Expr())
+        body = res.Register(self.Statement())
         if res.error: return res
 
         return res.Success(WhileNode(condition, body, False))
@@ -1290,20 +1349,54 @@ class Parser:
 
 class RTResult:
     def __init__ (self):
-        self.value = None
-        self.error = None
+        self.Reset()
+
+    def Reset (self):
+        self.value           = None
+        self.error           = None
+        self.funcReturnValue = None
+        self.loopContinue    = False
+        self.loopBreak       = False
 
     def Register (self, res):
-        if res.error: self.error = res.error
+        self.error           = res.error
+        self.funcReturnValue = res.funcReturnValue
+        self.loopContinue    = res.loopContinue
+        self.loopBreak       = res.loopBreak
         return res.value
 
     def Success (self, value):
+        self.Reset()
         self.value = value
         return self
 
+    def SuccessReturn (self, value):
+        self.Reset()
+        self.funcReturnValue = value
+        return self
+
+    def SuccessContinue (self):
+        self.Reset()
+        self.loopContinue = True
+        return self
+
+    def SuccessBreak (self):
+        self.Reset()
+        self.loopBreak = True
+        return self
+
     def Failure (self, error):
+        self.Reset()
         self.error = error
         return self
+
+    def ShouldReturn (self):
+        return (
+            self.error           or
+            self.funcReturnValue or
+            self.loopContinue    or
+            self.loopBreak
+        )
 
 
 ################################################################################
@@ -1619,16 +1712,16 @@ class BaseFunction(Value):
     def CheckAndPopulateArgs(self, argNames, args, exeContext):
         res = RTResult()
         res.Register(self.CheckArgs(argNames, args))
-        if res.error: return res
+        if res.ShouldReturn(): return res
         self.PopulateArgs(argNames, args, exeContext)
         return res.Success(None)
 
 class Function(BaseFunction):
-    def __init__ (self, name, bodyNode, argNames, shouldReturnNull):
+    def __init__ (self, name, bodyNode, argNames, shouldAutoReturn):
         super().__init__(name)
         self.bodyNode         = bodyNode
         self.argNames         = argNames
-        self.shouldReturnNull = shouldReturnNull
+        self.shouldAutoReturn = shouldAutoReturn
 
     def Execute(self, args):
         res         = RTResult()
@@ -1636,15 +1729,17 @@ class Function(BaseFunction):
         exeContext  = self.GenerateNewContext()
 
         res.Register(self.CheckAndPopulateArgs(self.argNames, args, exeContext))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         value = res.Register(interpreter.Visit(self.bodyNode, exeContext))
-        if res.error: return res
+        if res.ShouldReturn() and res.funcReturnValue == None: return res
 
-        return res.Success(Number.null if shouldReturnNull else value)
+        retValue = (value if self.shouldAutoReturn else None) or res.funcReturnValue or Number.null
+
+        return res.Success(retValue)
 
     def Copy (self):
-        copy = Function(self.name, self.bodyNode, self.argNames, self.shouldReturnNull)
+        copy = Function(self.name, self.bodyNode, self.argNames, self.shouldAutoReturn)
         copy.SetContext(self.context)
         copy.SetPosition(self.posStart, self.posEnd)
         return copy
@@ -1664,10 +1759,10 @@ class BuiltInFunction(BaseFunction):
         method     = getattr(self, methodName, self.NoVisitMethod)
 
         res.Register(self.CheckAndPopulateArgs(method.argNames, args, exeContext))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         returnValue = res.Register(method(exeContext))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         return res.Success(returnValue)
 
@@ -1773,15 +1868,15 @@ class BuiltInFunction(BaseFunction):
         return RTResult().Success(element)
     Execute_Pop.argNames = ['list','index']
 
-    def Execute_GCD(self, exeContext):
+    def Execute_GCD (self, exeContext):
         pass
     Execute_GCD.argNames = ['valueA','valueB']
 
-    def Execute_Sqrt(self, exeContext):
+    def Execute_Sqrt (self, exeContext):
         pass
     Execute_Sqrt.argNames = ['value']
 
-    def Execute_Rand(self, exeContext):
+    def Execute_Rand (self, exeContext):
         pass
     Execute_Rand.argNames = []
 
@@ -1876,7 +1971,7 @@ class Interpreter:
         res     = RTResult()
         varName = node.varNameTok.value
         value   = res.Register(self.Visit(node.valueNode, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         context.symbolTable.set(varName, value)
         return res.Success(value)
@@ -1901,9 +1996,9 @@ class Interpreter:
     def Visit_BinOpNode (self, node, context):
         res   = RTResult()
         left  = res.Register(self.Visit(node.leftNode, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
         right = res.Register(self.Visit(node.rightNode, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         error = None
         tokType = node.opTok._type
@@ -1944,7 +2039,7 @@ class Interpreter:
     def Visit_UnaryOpNode (self, node, context):
         res    = RTResult()
         number = res.Register(self.Visit(node.node, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         error = None
 
@@ -1965,17 +2060,17 @@ class Interpreter:
 
         for condition, expr, shouldReturnNull in node.cases:
             conditionValue = res.Register(self.Visit(condition, context))
-            if res.error: return res
+            if res.ShouldReturn(): return res
 
             if conditionValue.IsTrue():
                 exprValue = res.Register(self.Visit(expr, context))
-                if res.error: return res
+                if res.ShouldReturn(): return res
                 return res.Success(Number.null if shouldReturnNull else exprValue)
 
         if node.elseCase:
             expr, shouldReturnNull = node.elseCase
             elseValue = res.Register(self.Visit(expr, context))
-            if res.error: return res
+            if res.ShouldReturn(): return res
             return res.Success(Number.null if shouldReturnNull else elseValue)
 
         return res.Success(Number.null)
@@ -1985,16 +2080,16 @@ class Interpreter:
         elements   = []
 
         startValue = res.Register(self.Visit(node.startNode, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         if node.stepNode:
             stepValue = res.Register(self.Visit(node.stepNode, context))
-            if res.error: return res
+            if res.ShouldReturn(): return res
         else:
             stepValue = Number(1)
 
         endValue = res.Register(self.Visit(node.endNode, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         i = startValue.value
 
@@ -2007,11 +2102,16 @@ class Interpreter:
             context.symbolTable.set(node.iteratorName.value, Number(i))
             i += stepValue.value
 
-            elements.append(res.Register(self.Visit(node.bodyNode, context)))
-            if res.error: return res
+            value = res.Register(self.Visit(node.bodyNode, context))
+            if res.ShouldReturn() and res.loopContinue == False and res.loopBreak == False: return res
+
+            if res.loopContinue: continue
+            if res.loopBreak:    break
+
+            elements.append(value)
 
         return res.Success(
-            Number.null if shouldReturnNull else
+            Number.null if node.shouldReturnNull else
             List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
@@ -2020,15 +2120,20 @@ class Interpreter:
         elements = []
         while True:
             conditionValue = res.Register(self.Visit(node.conditionNode, context))
-            if res.error: return res
+            if res.ShouldReturn(): return res
 
             if not conditionValue.IsTrue(): break
 
-            elements.append(res.Register(self.Visit(node.bodyNode, context)))
-            if res.error: return res
+            value = res.Register(self.Visit(node.bodyNode, context))
+            if res.ShouldReturn() and res.loopContinue == False and res.loopBreak == False: return res
+
+            if res.loopContinue: continue
+            if res.loopBreak:    break
+
+            elements.append(value)
 
         return res.Success(
-            Number.null if shouldReturnNull else
+            Number.null if node.shouldReturnNull else
             List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd)
         )
 
@@ -2038,7 +2143,7 @@ class Interpreter:
 
         for elementNode in node.elementNodes:
             elements.append(res.Register(self.Visit(elementNode, context)))
-            if res.error: return res
+            if res.ShouldReturn(): return res
 
         return res.Success(List(elements).SetContext(context).SetPosition(node.posStart, node.posEnd))
 
@@ -2048,7 +2153,7 @@ class Interpreter:
         funcName  = node.funcNameTok.value
         bodyNode  = node.bodyNode
         argNames  = [argName.value for argName in node.argNameToks]
-        funcValue = Function(funcName, bodyNode, argNames, node.shouldReturnNull)
+        funcValue = Function(funcName, bodyNode, argNames, node.shouldAutoReturn)
         funcValue.SetContext(context)
         funcValue.SetPosition(node.posStart, node.posEnd)
 
@@ -2061,21 +2166,38 @@ class Interpreter:
         args = []
 
         valueToCall = res.Register(self.Visit(node.nodeToCall, context))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         valueToCall = valueToCall.Copy().SetPosition(node.posStart, node.posEnd)
 
         for argNode in node.argNodes:
             args.append(res.Register(self.Visit(argNode, context)))
-            if res.error: return res
+            if res.ShouldReturn(): return res
 
         returnValue = res.Register(valueToCall.Execute(args))
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         returnValue = returnValue.Copy().SetPosition(node.posStart, node.posEnd).SetContext(context)
-        if res.error: return res
+        if res.ShouldReturn(): return res
 
         return res.Success(returnValue)
+
+    def Visit_ReturnNode (self, node, context):
+        res = RTResult()
+
+        if node.nodeToReturn:
+            value = res.Register(self.Visit(node.nodeToReturn, context))
+            if res.ShouldReturn(): return res
+        else:
+            value = Number.null
+
+        return res.SuccessReturn(value)
+
+    def Visit_ContinueNode (self, node, context):
+        return RTResult().SuccessContinue()
+
+    def Visit_BreakNode (self, node, context):
+        return RTResult().SuccessBreak()
 
 ################################################################################
 #                                    Main                                      #
