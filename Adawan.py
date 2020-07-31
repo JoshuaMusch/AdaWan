@@ -1938,6 +1938,25 @@ class BuiltInFunction(BaseFunction):
         return RTResult().Success(Number(rand))
     Execute_Rand.argNames = ['low','high']
 
+    def Execute_Floor (self, exeContext):
+        n = exeContext.symbolTable.get("number")
+        d = exeContext.symbolTable.get("digits")
+        d = d.value + 1
+
+        if d == 1: return RTResult().Success(Number(int(n.value)))
+
+        numStr = str(n.value)
+        idx    = numStr.find(".")
+
+        if idx == -1:
+            return RTResult().Success(n)
+        else:
+            num = float(numStr[0:idx+d if idx+d < len(numStr) else len(numStr)])
+            return RTResult().Success(Number(num))
+
+        return RTResult().Success(Number(rand))
+    Execute_Floor.argNames = ['number','digits']
+
     def Execute_Degrees (self, exeContext):
         r = exeContext.symbolTable.get("radians")
         return RTResult().Success(Number(r.value * (180 / math.pi)))
@@ -2066,6 +2085,7 @@ BuiltInFunction.Extend      = BuiltInFunction("Extend")
 BuiltInFunction.GCD         = BuiltInFunction("GCD")
 BuiltInFunction.Sqrt        = BuiltInFunction("Sqrt")
 BuiltInFunction.Rand        = BuiltInFunction("Rand")
+BuiltInFunction.Floor       = BuiltInFunction("Floor")
 BuiltInFunction.Run         = BuiltInFunction("Run")
 BuiltInFunction.Degrees     = BuiltInFunction("Degrees")
 BuiltInFunction.Radians     = BuiltInFunction("Radians")
@@ -2394,6 +2414,7 @@ globalSymbolTable.set("extend",      BuiltInFunction.Extend       )
 globalSymbolTable.set("gcd",         BuiltInFunction.GCD          )
 globalSymbolTable.set("sqrt",        BuiltInFunction.Sqrt         )
 globalSymbolTable.set("rand",        BuiltInFunction.Rand         )
+globalSymbolTable.set("floor",       BuiltInFunction.Floor        )
 globalSymbolTable.set("run",         BuiltInFunction.Run          )
 globalSymbolTable.set("degrees",     BuiltInFunction.Degrees      )
 globalSymbolTable.set("radians",     BuiltInFunction.Radians      )
