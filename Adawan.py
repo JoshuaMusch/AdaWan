@@ -1598,10 +1598,12 @@ class Number(Value):
     def __repr__ (self):
         return str(self.value)
 
-Number.null  = Number(   0   )
-Number.false = Number(   0   )
-Number.true  = Number(   1   )
-Number.pi    = Number(math.pi)
+Number.null  = Number(    0    )
+Number.false = Number(    0    )
+Number.true  = Number(    1    )
+Number.pi    = Number(math.pi  )
+Number.e     = Number(math.e   )
+Number.inf   = Number(math.inf )
 
 class List(Value):
     def __init__ (self, elements):
@@ -1902,16 +1904,103 @@ class BuiltInFunction(BaseFunction):
     Execute_Len.argNames = ['list']
 
     def Execute_GCD (self, exeContext):
-        pass
+        a = exeContext.symbolTable.get("valueA")
+        b = exeContext.symbolTable.get("valueB")
+
+        while true:
+            if a == 0:
+                return b
+            tmp = a
+            a   = a % b
+            b   = tmp
     Execute_GCD.argNames = ['valueA','valueB']
 
     def Execute_Sqrt (self, exeContext):
-        pass
+        value = exeContext.symbolTable.get("value")
+        x     = value
+        y     = 1
+        # Precision of the final answer
+        p     = 0.00001
+
+        while (x - y) > e:
+            x = (x + y) / 2
+            y = value   / x
+        return x
     Execute_Sqrt.argNames = ['value']
 
     def Execute_Rand (self, exeContext):
-        pass
-    Execute_Rand.argNames = []
+        import random
+        low  = exeContext.symbolTable.get("low")
+        high = exeContext.symbolTable.get("high")
+
+        return.randrange(low, high, 1)
+    Execute_Rand.argNames = ['low','high']
+
+    def Execute_Degrees (self, exeContext):
+        r = exeContext.symbolTable.get("radians")
+        return r * (180 / math.pi)
+    Execute_Degrees.argNames = ['radians']
+
+    def Execute_Radians (self, exeContext):
+        d = exeContext.symbolTable.get("degrees")
+        return d * (math.pi / 180)
+    Execute_Radians.argNames = ['degrees']
+
+    def Execute_Sin (self, exeContext):
+        ang = exeContext.symbolTable.get("angle")
+        sin   = 0
+        # Convert to degrees if value is outside (-2pi, 2pi)
+        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
+            ang = ang % 360
+            ang = ang * (math.pi / 180)
+
+        # Use Taylor Series to calculate the sin of the angle
+        #     x^3   x^5   x^7   x^9
+        # x - --- + --- - --- + --- - ...
+        #      3!    5!    7!    9!
+        for i in range(25):
+            sin +=  math.pow(-1, i) *  math.pow(ang, (2*i+1)) / math.factorial(2*i+1)
+        return sin
+    Execute_Sin.argNames = ['angle']
+
+    def Execute_Cos (self, exeContext):
+        ang = exeContext.symbolTable.get("angle")
+        cos   = 0
+        # Convert to degrees if value is outside (-2pi, 2pi)
+        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
+            ang = ang % 360
+            ang = ang * (math.pi / 180)
+
+        # Use Taylor Series to calculate the sin of the angle
+        # x^2   x^4   x^6   x^8   x^10
+        # --- - --- + --- - --- + ---- ...
+        #  2!    4!    6!    8!    10!
+        for i in range(25):
+            cos +=  math.pow(-1, i) *  math.pow(ang, (2*i)) / math.factorial(2*i)
+        return cos
+    Execute_Cos.argNames = ['angle']
+
+    def Execute_Tan (self, exeContext):
+        ang = exeContext.symbolTable.get("angle")
+        sin = 0
+        # Convert to degrees if value is outside (-2pi, 2pi)
+        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
+            ang = ang % 360
+            ang = ang * (math.pi / 180)
+
+        # Use Taylor Series to calculate the sin of the angle
+        #     x^3   x^5   x^7   x^9
+        # x - --- + --- - --- + --- - ...
+        #      3!    5!    7!    9!
+        for i in range(25):
+            sin += math.pow(-1, i) *  math.pow(ang, (2*i+1)) / math.factorial(2*i+1)
+
+        # Calculate the value for tan(angle)
+        #       sin(x)
+        # ------------------
+        # sqrt(1 - sin^2(x))
+        return sin / (math.sqrt(1 - math.pow(sin, 2)))
+    Execute_Tan.argNames = ['angle']
 
     def Execute_Run (self, exeContext):
         fname = exeContext.symbolTable.get("fname")
@@ -1974,6 +2063,11 @@ BuiltInFunction.GCD         = BuiltInFunction("GCD")
 BuiltInFunction.Sqrt        = BuiltInFunction("Sqrt")
 BuiltInFunction.Rand        = BuiltInFunction("Rand")
 BuiltInFunction.Run         = BuiltInFunction("Run")
+BuiltInFunction.Degrees     = BuiltInFunction("Degrees")
+BuiltInFunction.Radians     = BuiltInFunction("Radians")
+BuiltInFunction.Sin         = BuiltInFunction("Sin")
+BuiltInFunction.Cos         = BuiltInFunction("Cos")
+BuiltInFunction.Tan         = BuiltInFunction("Tan")
 
 ################################################################################
 #                                   CONTEXT                                    #
@@ -2278,6 +2372,8 @@ globalSymbolTable.set("Null",        Number.null                  )
 globalSymbolTable.set("True",        Number.true                  )
 globalSymbolTable.set("False",       Number.false                 )
 globalSymbolTable.set("pi",          Number.pi                    )
+globalSymbolTable.set("e",           Number.e                     )
+globalSymbolTable.set("inf",         Number.inf                   )
 globalSymbolTable.set("print",       BuiltInFunction.Print        )
 globalSymbolTable.set("printReturn", BuiltInFunction.PrintReturn  )
 globalSymbolTable.set("input",       BuiltInFunction.Input        )
@@ -2295,6 +2391,11 @@ globalSymbolTable.set("gcd",         BuiltInFunction.GCD          )
 globalSymbolTable.set("sqrt",        BuiltInFunction.Sqrt         )
 globalSymbolTable.set("rand",        BuiltInFunction.Rand         )
 globalSymbolTable.set("run",         BuiltInFunction.Run          )
+globalSymbolTable.set("degrees",     BuiltInFunction.Degrees      )
+globalSymbolTable.set("radians",     BuiltInFunction.Radians      )
+globalSymbolTable.set("sin",         BuiltInFunction.Sin          )
+globalSymbolTable.set("cos",         BuiltInFunction.Cos          )
+globalSymbolTable.set("tan",         BuiltInFunction.Tan          )
 
 def Run (fname, text):
     # Generate Tokens
