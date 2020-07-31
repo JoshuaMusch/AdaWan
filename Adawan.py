@@ -1933,73 +1933,77 @@ class BuiltInFunction(BaseFunction):
         low  = exeContext.symbolTable.get("low")
         high = exeContext.symbolTable.get("high")
 
-        return.randrange(low, high, 1)
+        rand = random.randrange(low.value, high.value, 1)
+
+        return RTResult().Success(Number(rand))
     Execute_Rand.argNames = ['low','high']
 
     def Execute_Degrees (self, exeContext):
         r = exeContext.symbolTable.get("radians")
-        return r * (180 / math.pi)
+        return RTResult().Success(Number(r.value * (180 / math.pi)))
     Execute_Degrees.argNames = ['radians']
 
     def Execute_Radians (self, exeContext):
         d = exeContext.symbolTable.get("degrees")
-        return d * (math.pi / 180)
+        return RTResult().Success(Number(d.value * (math.pi / 180)))
     Execute_Radians.argNames = ['degrees']
 
     def Execute_Sin (self, exeContext):
         ang = exeContext.symbolTable.get("angle")
         sin   = 0
         # Convert to degrees if value is outside (-2pi, 2pi)
-        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
-            ang = ang % 360
-            ang = ang * (math.pi / 180)
+        if ang.value < (-2*math.pi) or ang.value > (2*math.pi): # Degrees
+            ang.value = ang.value % 360
+            ang.value = ang.value * (math.pi / 180)
 
         # Use Taylor Series to calculate the sin of the angle
         #     x^3   x^5   x^7   x^9
         # x - --- + --- - --- + --- - ...
         #      3!    5!    7!    9!
         for i in range(25):
-            sin +=  math.pow(-1, i) *  math.pow(ang, (2*i+1)) / math.factorial(2*i+1)
-        return sin
+            sin +=  math.pow(-1, i) *  math.pow(ang.value, (2*i+1)) / math.factorial(2*i+1)
+        return RTResult().Success(Number(round(sin, 3)))
     Execute_Sin.argNames = ['angle']
 
     def Execute_Cos (self, exeContext):
         ang = exeContext.symbolTable.get("angle")
         cos   = 0
         # Convert to degrees if value is outside (-2pi, 2pi)
-        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
-            ang = ang % 360
-            ang = ang * (math.pi / 180)
+        if ang.value < (-2*math.pi) or ang.value > (2*math.pi): # Degrees
+            ang.value = ang.value % 360
+            ang.value = ang.value * (math.pi / 180)
 
         # Use Taylor Series to calculate the sin of the angle
         # x^2   x^4   x^6   x^8   x^10
         # --- - --- + --- - --- + ---- ...
         #  2!    4!    6!    8!    10!
         for i in range(25):
-            cos +=  math.pow(-1, i) *  math.pow(ang, (2*i)) / math.factorial(2*i)
-        return cos
+            cos +=  math.pow(-1, i) *  math.pow(ang.value, (2*i)) / math.factorial(2*i)
+        return RTResult().Success(Number(round(cos, 3)))
     Execute_Cos.argNames = ['angle']
 
     def Execute_Tan (self, exeContext):
         ang = exeContext.symbolTable.get("angle")
         sin = 0
         # Convert to degrees if value is outside (-2pi, 2pi)
-        if ang <= (-2*math.pi) and ang >= (2*math.pi): # Degrees
-            ang = ang % 360
-            ang = ang * (math.pi / 180)
+        if ang.value < (-2*math.pi) or ang.value > (2*math.pi): # Degrees
+            ang.value = ang.value % 360
+            ang.value = ang.value * (math.pi / 180)
 
         # Use Taylor Series to calculate the sin of the angle
         #     x^3   x^5   x^7   x^9
         # x - --- + --- - --- + --- - ...
         #      3!    5!    7!    9!
         for i in range(25):
-            sin += math.pow(-1, i) *  math.pow(ang, (2*i+1)) / math.factorial(2*i+1)
+            sin += math.pow(-1, i) *  math.pow(ang.value, (2*i+1)) / math.factorial(2*i+1)
 
         # Calculate the value for tan(angle)
         #       sin(x)
         # ------------------
         # sqrt(1 - sin^2(x))
-        return sin / (math.sqrt(1 - math.pow(sin, 2)))
+        tan = sin / (math.sqrt(1 - math.pow(sin, 2)))
+
+        return RTResult().Success(Number(round(tan, 3)))
     Execute_Tan.argNames = ['angle']
 
     def Execute_Run (self, exeContext):
