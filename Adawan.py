@@ -653,7 +653,6 @@ class ParseResult:
 
     def Success (self, node):
         self.node = node
-        if DEBUG: print(node)
         return self
 
     def Failure (self, error):
@@ -1426,7 +1425,6 @@ class RTResult:
             self.loopContinue    or
             self.loopBreak
         )
-
 
 ################################################################################
 #                                    VALUES                                    #
@@ -2595,8 +2593,6 @@ class Interpreter:
 #                                    Main                                      #
 ################################################################################
 
-DEBUG             = 0
-
 globalSymbolTable = SymbolTable()
 globalSymbolTable.set("Null",        Number.null                  )
 globalSymbolTable.set("True",        Number.true                  )
@@ -2637,16 +2633,10 @@ def Run (fname, text):
     tokens, error = lexar.MakeTokens()
     if error: return None, error
 
-    if DEBUG: print("LEXAR:")
-    if DEBUG: print(tokens)
-
     # Generate Abstract Search Tree
     parser = Parser(tokens)
     ast    = parser.Parse()
     if ast.error: return None, ast.error
-
-    if DEBUG: print("PARSED:")
-    if DEBUG: print(ast.node)
 
     # Run the Interpreter
     interpreter = Interpreter()
