@@ -6,10 +6,10 @@ import math
 #                                   CONSTANTS                                  #
 ################################################################################
 
-HEX_DIGITS     = '0123456789ABCDEF'
-DIGITS         = '0123456789'
-LETTERS        = string.ascii_letters
-LETTERS_DIGITS = LETTERS + DIGITS
+HEX_DIGITS      = '0123456789ABCDEF'
+DIGITS          = '0123456789'
+LETTERS         = string.ascii_letters
+LETTERS_DIGITS  = LETTERS + DIGITS
 
 ################################################################################
 #                                    ERRORS                                    #
@@ -152,7 +152,7 @@ KEYWORDS = [
     'let',
     'AND', '&',
     'OR',  '|',
-    'NOT', '~',
+    'NOT',
     'if',
     'else',
     'elif',
@@ -257,6 +257,12 @@ class Lexar:
                 tokens.append(Token(TT_FACTORIAL, posStart = self.currPos))
                 for x in range(len(poppedTokens)):
                     tokens.append(poppedTokens[len(poppedTokens)-x-1])
+                self.Advance()
+            elif self.currChar == '&':
+                tokens.append(Token(TT_KEYWORD, value = "&", posStart = self.currPos))
+                self.Advance()
+            elif self.currChar == '|':
+                tokens.append(Token(TT_KEYWORD, value = "|", posStart = self.currPos))
                 self.Advance()
             elif self.currChar == '(':
                 tokens.append(Token(TT_LPAREN,    posStart = self.currPos))
@@ -787,11 +793,11 @@ class Parser:
             if res.error: return res
             return res.Success(VarAssignNode(varName, expr))
 
-        node = res.Register(self.BinOp(self.CompExpr, ((TT_KEYWORD, 'AND'), (TT_KEYWORD, 'OR'))))
+        node = res.Register(self.BinOp(self.CompExpr, (
+            (TT_KEYWORD, 'AND'),(TT_KEYWORD, '&'),
+            (TT_KEYWORD, 'OR'), (TT_KEYWORD, '|')))
+        )
 
-        # node = res.Register(self.BinOp(self.CompExpr,
-        #     ((TT_KEYWORD, "AND"), (TT_KEYWORD, "&"),
-        #     (TT_KEYWORD, "OR"),  (TT_KEYWORD, "|"))))
         if res.error:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
@@ -802,7 +808,7 @@ class Parser:
 
     def CompExpr (self):
         res = ParseResult()
-        if self.currToken.Matches(TT_KEYWORD, 'NOT') or self.currToken.Matches(TT_KEYWORD, '~'):
+        if self.currToken.Matches(TT_KEYWORD, 'NOT'):
             opTok = self.currToken
             res.RegisterAdvance()
             self.Advance()
@@ -1495,13 +1501,18 @@ class Number(Value):
         super().__init__()
         self.value = value
 
+    def To_Binary(self, dec):
+        x = int(dec % 2)
+        r = int(dec / 2)
+        if r == 0:
+            return str(x)
+        return self.To_Binary(r) + str(x)
+
     def To_Int(self, B):
         try:
-            print("BIN")
             num = int(B.value, 2)
         except:
             try:
-                print("HEX")
                 num = int(B.value, 16)
             except:
                 num = None
@@ -1615,18 +1626,52 @@ class Number(Value):
             return Number(int(self.value >= b)).SetContext(self.context), None
 
     def AndedBy(self, B):
+        def And(A, B):
+            a = self.To_Binary(A)
+            b = self.To_Binary(B)
+            andStr  = ""
+
+            a.zfill(len(b))
+            b.zfill(len(a))
+
+            for i in range(len(a)):
+                if a[i] == b[i]:
+                    andStr += "1"
+                else:
+                    andStr += "0"
+
+            return andStr
+
         if isinstance(B, Number):
-            return Number(int(self.value and B.value)).SetContext(self.context), None
+            return Number(int(And(self.value, B.value),2)).SetContext(self.context), None
         elif isinstance(B, String) and None != self.To_Int(B):
-            return Number(int(self.value and self.To_Int(B).value)).SetContext(self.context), None
+            return Number(int(And(self.value, self.To_Int(B).value),2)).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def OredBy(self, B):
+        def Or(A, B):
+            a = self.To_Binary(A)
+            b = self.To_Binary(B)
+            orStr  = ""
+
+            if len(a) < len(b):
+                a.zfill(len(b))
+            elif len(a) > len(b):
+                b.zfill(len(a))
+
+            for i in range(len(a)):
+                if a[i] == 1 or b[i] == 1:
+                    orStr += "1"
+                else:
+                    orStr += "0"
+
+            return orStr
+
         if isinstance(B, Number):
-            return Number(int(self.value or B.value)).SetContext(self.context), None
+            return Number(int(Or(self.value, B.value),2)).SetContext(self.context), None
         elif isinstance(B, String) and None != self.To_Int(B):
-            return Number(int(self.value or self.To_Int(B).value)).SetContext(self.context), None
+            return Number(int(Or(self.value, self.To_Int(B).value),2)).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
@@ -1718,6 +1763,25 @@ class String(Value):
         super().__init__()
         self.value = value
 
+    def To_Int(self, B):
+        try:
+            print("BIN")
+            num = int(B.value, 2)
+        except:
+            try:
+                print("HEX")
+                num = int(B.value, 16)
+            except:
+                num = None
+        return Number(num).SetContext(B.context).SetPosition(B.posStart, B.posEnd)
+
+    def To_Binary(self, dec):
+        x = int(dec % 2)
+        r = int(dec / 2)
+        if r == 0:
+            return str(x)
+        return self.To_Binary(r) + str(x)
+
     def AddedTo (self, B):
         if isinstance(B, String):
             return String(self.value + B.value).SetContext(self.context), None
@@ -1729,6 +1793,42 @@ class String(Value):
             return String(self.value * B.value).SetContext(self.context), None
         else:
             return None, IllegalOperation(self, B)
+
+    def AndedBy(self, B):
+        def And(A, B):
+            a = self.To_Binary(int(A, 2))
+            b = self.To_Binary(int(B, 2))
+            andStr  = ""
+
+            a = a.zfill(len(b))
+            b = b.zfill(len(a))
+
+            print(a)
+            print(b)
+
+            for i in range(len(a)):
+                print(f"a: {a[i]}; b: {b[i]}")
+                if a[i] == b[i]:
+                    andStr += "1"
+                else:
+                    andStr += "0"
+
+            return andStr
+
+        if isinstance(B, Number) and None != self.To_Int(B):
+            return Number(int(And(self.value, self.To_Int(B).value),2)).SetContext(self.context), None
+        elif isinstance(B, String):
+            return String(And(self.value, B.value)).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+
+    def OredBy(self, B):
+        if isinstance(B, Number):
+            return Number(int(self.value or B.value)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(int(self.value or self.To_Int(B).value)).SetContext(self.context), None
+        else:
+            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def IsTrue (self):
         return len(self.value) > 0
@@ -2113,7 +2213,6 @@ class BuiltInFunction(BaseFunction):
         def To_Binary(dec):
             x = int(dec % 2)
             r = int(dec / 2)
-            print(f"x: {x}; r: {r}")
             if r == 0:
                 return str(x)
             return To_Binary(r) + str(x)
@@ -2340,7 +2439,7 @@ class Interpreter:
             number, error = number.MultipliedBy(Number(-1))
         elif node.opTok._type == TT_FACTORIAL:
             number, error = number.Factorial()
-        elif node.opTok.Matches(TT_KEYWORD, 'NOT') or node.opTok.Matches(TT_KEYWORD, '~'):
+        elif node.opTok.Matches(TT_KEYWORD, 'NOT'):
             number, error = number.Notted()
 
         if error:
