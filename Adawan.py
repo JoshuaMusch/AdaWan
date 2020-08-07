@@ -6,6 +6,7 @@ import math
 #                                   CONSTANTS                                  #
 ################################################################################
 
+HEX_DIGITS     = '0123456789ABCDEF'
 DIGITS         = '0123456789'
 LETTERS        = string.ascii_letters
 LETTERS_DIGITS = LETTERS + DIGITS
@@ -220,7 +221,7 @@ class Lexar:
                 tokens.append(self.MakeNumber())
             elif self.currChar in LETTERS:
                 tokens.append(self.MakeIdentifier())
-            elif self.currChar == '"':
+            elif self.currChar == '"' or self.currChar == "'":
                 tokens.append(self.MakeString())
             elif self.currChar == '+':
                 tokens.append(Token(TT_PLUS,      posStart = self.currPos))
@@ -336,12 +337,14 @@ class Lexar:
         escapeChar = False
         self.Advance()
 
+        strIds      = ['"', "'"]
+
         escapeChars = {
 			'n': '\n',
 			't': '\t'
 		}
 
-        while self.currChar != None and (self.currChar != '"' or escapeChar):
+        while self.currChar != None and (self.currChar not in strIds or escapeChar):
             if escapeChar:
 
                 str += escapeChars.get(self.currChar, self.currChar)
@@ -1492,21 +1495,39 @@ class Number(Value):
         super().__init__()
         self.value = value
 
+    def To_Int(self, B):
+        try:
+            print("BIN")
+            num = int(B.value, 2)
+        except:
+            try:
+                print("HEX")
+                num = int(B.value, 16)
+            except:
+                num = None
+        return Number(num).SetContext(B.context).SetPosition(B.posStart, B.posEnd)
+
     def AddedTo (self, B):
         if isinstance(B, Number):
             return Number(self.value + B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(self.value + self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def SubtractedBy (self, B):
         if isinstance(B, Number):
             return Number(self.value - B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(self.value - self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def MultipliedBy (self, B):
         if isinstance(B, Number):
             return Number(self.value * B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(self.value * self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
@@ -1527,6 +1548,8 @@ class Number(Value):
     def PowerOf (self, B):
         if isinstance(B, Number):
             return Number(self.value ** B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(self.value ** self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
@@ -1539,6 +1562,14 @@ class Number(Value):
                     self.context
                 )
             return Number(self.value / B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            if self.To_Int(B).value == 0:
+                return None, RunTimeError(
+                    B.posStart, B.posEnd,
+                    "Division By Zero",
+                    self.context
+                )
+            return Number(self.value / self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
@@ -1551,35 +1582,51 @@ class Number(Value):
                     self.context
                 )
             return Number(self.value % B.value).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            if self.To_Int(B).value == 0:
+                return None, RunTimeError(
+                    B.posStart, B.posEnd,
+                    "Division By Zero",
+                    self.context
+                )
+            return Number(self.value % self.To_Int(B).value).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def GetComparison(self, tokType, B):
         if isinstance(B, Number):
-            if tokType == TT_EE:
-                return Number(int(self.value == B.value)).SetContext(self.context), None
-            elif tokType == TT_NE:
-                return Number(int(self.value != B.value)).SetContext(self.context), None
-            elif tokType == TT_LT:
-                return Number(int(self.value < B.value)).SetContext(self.context), None
-            elif tokType == TT_GT:
-                return Number(int(self.value > B.value)).SetContext(self.context), None
-            elif tokType == TT_LTE:
-                return Number(int(self.value <= B.value)).SetContext(self.context), None
-            elif tokType == TT_GTE:
-                return Number(int(self.value >= B.value)).SetContext(self.context), None
+            b = B.value
+        elif isinstance(B, String) and None != self.To_Int(B):
+            b = self.To_Int(B).value
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+
+        if tokType == TT_EE:
+            return Number(int(self.value == b)).SetContext(self.context), None
+        elif tokType == TT_NE:
+            return Number(int(self.value != b)).SetContext(self.context), None
+        elif tokType == TT_LT:
+            return Number(int(self.value <  b)).SetContext(self.context), None
+        elif tokType == TT_GT:
+            return Number(int(self.value >  b)).SetContext(self.context), None
+        elif tokType == TT_LTE:
+            return Number(int(self.value <= b)).SetContext(self.context), None
+        elif tokType == TT_GTE:
+            return Number(int(self.value >= b)).SetContext(self.context), None
 
     def AndedBy(self, B):
         if isinstance(B, Number):
             return Number(int(self.value and B.value)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(int(self.value and self.To_Int(B).value)).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
     def OredBy(self, B):
         if isinstance(B, Number):
             return Number(int(self.value or B.value)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            return Number(int(self.value or self.To_Int(B).value)).SetContext(self.context), None
         else:
             return None, self.value.IllegalOperation(self.posStart, B.posEnd)
 
@@ -2025,6 +2072,63 @@ class BuiltInFunction(BaseFunction):
         return RTResult().Success(Number(round(tan, 3)))
     Execute_Tan.argNames = ['angle']
 
+    def Execute_Int (self, exeContext):
+        numInt = 0
+        numStr = exeContext.symbolTable.get("numStr")
+        for i in range(len(numStr.value)):
+            if numStr.value[i] not in DIGITS:
+                return RTResult().Failure(RunTimeError(
+                    self.posStart, self.posEnd,
+                    "String must only contain Numbers",
+                    exeContext
+                ))
+            print(i)
+            print(DIGITS[int(numStr.value[i])])
+            numInt = numInt*10 + int(DIGITS[int(numStr.value[i])])
+        return RTResult().Success(Number(numInt))
+    Execute_Int.argNames = ["numStr"]
+
+    def Execute_Hex (self, exeContext):
+        def To_Hex(dec):
+            x = int(dec % 16)
+            r = int(dec / 16)
+            if r == 0:
+                return HEX_DIGITS[x]
+            return To_Hex(r) + HEX_DIGITS[x]
+
+        dec = exeContext.symbolTable.get("dec")
+        if not isinstance(dec, Number):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "Arguement must be a number",
+                exeContext
+            ))
+
+        hexString = '0x'
+
+        return RTResult().Success(String(hexString + To_Hex(dec.value)))
+    Execute_Hex.argNames = ["dec"]
+
+    def Execute_Binary (self, exeContext):
+        def To_Binary(dec):
+            x = int(dec % 2)
+            r = int(dec / 2)
+            print(f"x: {x}; r: {r}")
+            if r == 0:
+                return str(x)
+            return To_Binary(r) + str(x)
+
+        dec = exeContext.symbolTable.get("dec")
+        if not isinstance(dec, Number):
+            return RTResult().Failure(RunTimeError(
+                self.posStart, self.posEnd,
+                "Arguement must be a number",
+                exeContext
+            ))
+
+        return RTResult().Success(String(To_Binary(dec.value)))
+    Execute_Binary.argNames = ["dec"]
+
     def Execute_Run (self, exeContext):
         fname = exeContext.symbolTable.get("fname")
         if not isinstance(fname, String):
@@ -2092,6 +2196,9 @@ BuiltInFunction.Radians     = BuiltInFunction("Radians")
 BuiltInFunction.Sin         = BuiltInFunction("Sin")
 BuiltInFunction.Cos         = BuiltInFunction("Cos")
 BuiltInFunction.Tan         = BuiltInFunction("Tan")
+BuiltInFunction.Int         = BuiltInFunction("Int")
+BuiltInFunction.Hex         = BuiltInFunction("Hex")
+BuiltInFunction.Binary      = BuiltInFunction("Binary")
 
 ################################################################################
 #                                   CONTEXT                                    #
@@ -2421,6 +2528,9 @@ globalSymbolTable.set("radians",     BuiltInFunction.Radians      )
 globalSymbolTable.set("sin",         BuiltInFunction.Sin          )
 globalSymbolTable.set("cos",         BuiltInFunction.Cos          )
 globalSymbolTable.set("tan",         BuiltInFunction.Tan          )
+globalSymbolTable.set("int",         BuiltInFunction.Int          )
+globalSymbolTable.set("hex",         BuiltInFunction.Hex          )
+globalSymbolTable.set("binary",      BuiltInFunction.Binary       )
 
 def Run (fname, text):
     # Generate Tokens
