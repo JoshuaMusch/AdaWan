@@ -1819,11 +1819,9 @@ class String(Value):
 
     def To_Int(self, B):
         try:
-            print("BIN")
             num = int(B.value, 2)
         except:
             try:
-                print("HEX")
                 num = int(B.value, 16)
             except:
                 num = None
@@ -1883,6 +1881,46 @@ class String(Value):
             return Number(int(self.value or self.To_Int(B).value)).SetContext(self.context), None
         else:
             return None, Value.IllegalOperation(self.posStart, B.posEnd)
+
+    def ShiftLeft (self, B):
+        self = self.To_Int(self)
+        if isinstance(B, Number):
+            sl = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            for i in range(B.value):
+                sl.value += "0"
+            return Number(self.To_Int(sl)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            sl = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            for i in range(self.To_Int(B).value):
+                sl.value += "0"
+            return Number(self.To_Int(sl)).SetContext(self.context), None
+        else:
+            return None, Value.IllegalOperation(self, B)
+
+    def ShiftRight (self, B):
+        self = self.To_Int(self)
+        if isinstance(B, Number):
+            right = ""
+            sr    = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            if B.value >= len(self.To_Binary(self.value)):
+                sr.value = "0"
+            else:
+                for i in range(B.value):
+                    right += "0"
+                sr.value = right + sr.value[(0):len(sr.value)-B.value]
+            return Number(self.To_Int(sr)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            right = ""
+            sr    = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            if self.To_Int(B).value >= len(self.To_Binary(self.value)):
+                sr.value = "0"
+            else:
+                for i in range(self.To_Int(B).value):
+                    right += "0"
+                sr.value = right + sr.value[(0):len(sr.value)-self.To_Int(B).value]
+            return Number(self.To_Int(sr)).SetContext(self.context), None
+        else:
+            return None, Value.IllegalOperation(self, B)
 
     def IsTrue (self):
         return len(self.value) > 0
