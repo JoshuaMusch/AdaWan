@@ -142,6 +142,9 @@ TT_GT           = 'GT'
 TT_LTE          = 'LTE'
 TT_GTE          = 'GTE'
 
+TT_SHIFT_LEFT   = 'SHIFT_LEFT'
+TT_SHIFT_RIGHT  = 'SHIFT_RIGHT'
+
 TT_COLON        = 'COLON'
 TT_COMMA        = 'COMMA'
 
@@ -415,6 +418,9 @@ class Lexar:
         if self.currChar == '=':
             self.Advance()
             tokType = TT_LTE
+        elif self.currChar == '<':
+            self.Advance()
+            tokType = TT_SHIFT_LEFT
 
         return Token(tokType, posStart = posStart, posEnd = self.currPos)
 
@@ -426,6 +432,9 @@ class Lexar:
         if self.currChar == '=':
             self.Advance()
             tokType = TT_GTE
+        elif self.currChar == '>':
+            self.Advance()
+            tokType = TT_SHIFT_RIGHT
 
         return Token(tokType, posStart = posStart, posEnd = self.currPos)
 
@@ -816,7 +825,16 @@ class Parser:
             if res.error: return res
             return res.Success(UnaryOpNode(opTok, node))
 
-        node = res.Register(self.BinOp(self.ArithExpr, (TT_EE, TT_NE, TT_GT, TT_GTE, TT_LT, TT_LTE)))
+        node = res.Register(self.BinOp(self.ArithExpr, (
+            TT_SHIFT_LEFT,
+            TT_SHIFT_RIGHT,
+            TT_EE,
+            TT_NE,
+            TT_GT,
+            TT_GTE,
+            TT_LT,
+            TT_LTE
+        )))
         if res.error:
             return res.Failure(InvalidSyntaxError(
                 self.currToken.posStart, self.currToken.posEnd,
@@ -1489,7 +1507,7 @@ class Value:
     def IllegalOperation (self, B = None):
         if not B: B = self
         return RunTimeError(
-            self.posStart, self.posEnd,
+            self.posStart, B.posEnd,
             "Illegal Operation",
             self.context
         )
@@ -1522,7 +1540,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(self.value + self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def SubtractedBy (self, B):
         if isinstance(B, Number):
@@ -1530,7 +1548,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(self.value - self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def MultipliedBy (self, B):
         if isinstance(B, Number):
@@ -1538,7 +1556,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(self.value * self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def Factorial (self):
         factorial = 1
@@ -1560,7 +1578,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(self.value ** self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def DividedBy (self, B):
         if isinstance(B, Number):
@@ -1580,7 +1598,7 @@ class Number(Value):
                 )
             return Number(self.value / self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def ModulusOf (self, B):
         if isinstance(B, Number):
@@ -1600,7 +1618,7 @@ class Number(Value):
                 )
             return Number(self.value % self.To_Int(B).value).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def GetComparison(self, tokType, B):
         if isinstance(B, Number):
@@ -1608,7 +1626,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             b = self.To_Int(B).value
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
         if tokType == TT_EE:
             return Number(int(self.value == b)).SetContext(self.context), None
@@ -1645,7 +1663,7 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(int(And(self.value, self.To_Int(B).value),2)).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def OredBy(self, B):
         def Or(A, B):
@@ -1671,10 +1689,48 @@ class Number(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(int(Or(self.value, self.To_Int(B).value),2)).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self, B)
 
     def Notted(self):
         return Number(1 if self.value == 0 else 0).SetContext(self.context), None
+
+    def ShiftLeft (self, B):
+        if isinstance(B, Number):
+            sl = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            for i in range(B.value):
+                sl.value += "0"
+            return Number(self.To_Int(sl)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            sl = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            for i in range(self.To_Int(B).value):
+                sl.value += "0"
+            return Number(self.To_Int(sl)).SetContext(self.context), None
+        else:
+            return None, Value.IllegalOperation(self, B)
+
+    def ShiftRight (self, B):
+        if isinstance(B, Number):
+            right = ""
+            sr    = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            if B.value >= len(self.To_Binary(self.value)):
+                sr.value = "0"
+            else:
+                for i in range(B.value):
+                    right += "0"
+                sr.value = right + sr.value[(0):len(sr.value)-B.value]
+            return Number(self.To_Int(sr)).SetContext(self.context), None
+        elif isinstance(B, String) and None != self.To_Int(B):
+            right = ""
+            sr    = String(self.To_Binary(self.value)).SetPosition(self.posStart, self.posEnd)
+            if self.To_Int(B).value >= len(self.To_Binary(self.value)):
+                sr.value = "0"
+            else:
+                for i in range(self.To_Int(B).value):
+                    right += "0"
+                sr.value = right + sr.value[(0):len(sr.value)-self.To_Int(B).value]
+            return Number(self.To_Int(sr)).SetContext(self.context), None
+        else:
+            return None, Value.IllegalOperation(self, B)
 
     def Copy (self):
         copy = Number(self.value)
@@ -1818,7 +1874,7 @@ class String(Value):
         elif isinstance(B, String):
             return String(And(self.value, B.value)).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self.posStart, B.posEnd)
 
     def OredBy(self, B):
         if isinstance(B, Number):
@@ -1826,7 +1882,7 @@ class String(Value):
         elif isinstance(B, String) and None != self.To_Int(B):
             return Number(int(self.value or self.To_Int(B).value)).SetContext(self.context), None
         else:
-            return None, self.value.IllegalOperation(self.posStart, B.posEnd)
+            return None, Value.IllegalOperation(self.posStart, B.posEnd)
 
     def IsTrue (self):
         return len(self.value) > 0
@@ -1855,7 +1911,8 @@ class BaseFunction(Value):
 
     def CheckArgs (self, argNames, args):
         res = RTResult()
-        if len(args) != len(argNames) and self.name != "Pop":
+        excludedFunctions = ["Pop", "Int"]
+        if len(args) != len(argNames) and self.name not in excludedFunctions:
             return res.Failure(RunTimeError(
                 self.posStart, self.posEnd,
                 f"Expected {len(argNames)} input args but recieved {len(args)} args",
@@ -2171,20 +2228,29 @@ class BuiltInFunction(BaseFunction):
     Execute_Tan.argNames = ['angle']
 
     def Execute_Int (self, exeContext):
-        numInt = 0
         numStr = exeContext.symbolTable.get("numStr")
+        base   = exeContext.symbolTable.get("base")
+
+        if base == None:
+            base = Number(10)
+        elif base.value not in (2,8,10,16):
+            base.value = 10
+
+        numInt = 0
+        numDic = HEX_DIGITS[0:(base.value)]
+
         for i in range(len(numStr.value)):
-            if numStr.value[i] not in DIGITS:
+            if numStr.value[i] not in numDic:
                 return RTResult().Failure(RunTimeError(
                     self.posStart, self.posEnd,
-                    "String must only contain Numbers",
+                    f"For Base{base}: String must only contain items from {numDic[0]} to {numDic[base.value-1]}",
                     exeContext
                 ))
-            print(i)
-            print(DIGITS[int(numStr.value[i])])
-            numInt = numInt*10 + int(DIGITS[int(numStr.value[i])])
+
+            numInt = numInt*base.value + int(numDic[int(numStr.value[i])])
+
         return RTResult().Success(Number(numInt))
-    Execute_Int.argNames = ["numStr"]
+    Execute_Int.argNames = ["numStr", "base"]
 
     def Execute_Hex (self, exeContext):
         def To_Hex(dec):
@@ -2404,6 +2470,10 @@ class Interpreter:
             result, error = left.ModulusOf(right)
         elif tokType == TT_POWER:
             result, error = left.PowerOf(right)
+        elif tokType == TT_SHIFT_LEFT:
+            result, error = left.ShiftLeft(right)
+        elif tokType == TT_SHIFT_RIGHT:
+            result, error = left.ShiftRight(right)
         elif tokType == TT_EE:
             result, error = left.GetComparison(TT_EE, right)
         elif tokType == TT_NE:
